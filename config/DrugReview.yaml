@@ -1,0 +1,4 @@
+name: DrugReview
+
+valid_size: 0.1
+maxlen: 200
