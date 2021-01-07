@@ -136,3 +136,6 @@ data/
 
 # notebooks directory
 notebooks/
+
+# model checkpoint
+checkpoint/

@@ -1,4 +1,8 @@
 name: DrugReview
 
 valid_size: 0.1
-maxlen: 200
+emb_init: data/drugReview/emb_init.npy
+
+dataset:
+  maxlen: 200
+  label_encoder_filename: label_encoder

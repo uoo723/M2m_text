@@ -9,6 +9,7 @@ from typing import Iterable, Optional, Union
 import joblib
 import numpy as np
 from gensim.models import KeyedVectors
+from torch.utils.data import Dataset
 
 from ..preprocessing import LabelEncoder, build_vocab, tokenize
 
@@ -100,3 +101,33 @@ def get_vocab(
     vocab = build_vocab(tokenized_texts, w2v_model_path, pad=pad, unknown=unknown)
     np.save(vocab_path, vocab)
     return vocab
+
+
+def get_oversampled_data(
+    dataset: Dataset, num_sample_per_class: Iterable[int]
+) -> Iterable[int]:
+    """Return a list of imbalanced indices from a dataset.
+
+    # Reference: https://github.com/alinlab/M2m/blob/master/data_loader.py
+
+    Args:
+        dataset (Dataset): Dataset object.
+        num_samples_per_class (iter[int]): number of samples per class.
+
+    Returns:
+        oversampled_list (iter[int]): Oversampled weight list with shape (n_samples,)
+    """
+    length = dataset.__len__()
+    num_sample_per_class = list(num_sample_per_class)
+    num_samples = list(num_sample_per_class)
+
+    selected_list = []
+    indices = list(range(0, length))
+    for i in range(0, length):
+        index = indices[i]
+        _, label = dataset.__getitem__(index)
+        if num_sample_per_class[label] > 0:
+            selected_list.append(1 / num_samples[label])
+            num_sample_per_class[label] -= 1
+
+    return selected_list

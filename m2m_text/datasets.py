@@ -54,14 +54,16 @@ class Dataset(torch.utils.data.Dataset):
         """
         train_dataset = cls(*args, **kwargs)
         valid_dataset = cls(*args, **kwargs)
-        train_x, valid_x, train_y, valid_y = train_test_split(
-            train_dataset.x, train_dataset.y, test_size=test_size
+        train_x, valid_x, train_y, valid_y, train_raw_y, valid_raw_y = train_test_split(
+            train_dataset.x, train_dataset.y, train_dataset.raw_y, test_size=test_size
         )
 
         train_dataset.x = train_x
         train_dataset.y = train_y
         valid_dataset.x = valid_x
         valid_dataset.y = valid_y
+        train_dataset.raw_y = train_raw_y
+        valid_dataset.raw_y = valid_raw_y
 
         return train_dataset, valid_dataset
 
@@ -71,6 +73,10 @@ class Dataset(torch.utils.data.Dataset):
 
     @property
     def y(self) -> np.ndarray:
+        raise NotImplemented
+
+    @property
+    def raw_y(self) -> np.ndarray:
         raise NotImplemented
 
 
@@ -159,12 +165,22 @@ class TextDataset(Dataset):
 
             np.savez(npz_path, texts=texts, labels=labels)
 
+        self._labels = labels
+
         le = get_le(self.le_path, labels)
         labels = le.transform(labels)
         return torch.from_numpy(texts), torch.from_numpy(labels)
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplemented
+
+    @property
+    def raw_y(self):
+        return self._labels
+
+    @raw_y.setter
+    def raw_y(self, labels):
+        self._labels = labels
 
 
 class DrugReview(TextDataset):
