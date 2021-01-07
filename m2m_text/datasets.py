@@ -4,66 +4,17 @@ Created on 2020/12/31
 """
 
 import os
-import pickle
-from typing import Iterable, Optional, Tuple, Union
+from typing import Tuple, Union
 
-import joblib
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
 
-from .preprocessing import LabelEncoder
-from .utils import (
-    build_vocab,
-    check_integrity,
-    download_from_url,
-    extract_archive,
-    tokenize,
-    truncate_text,
-)
-
-
-def _get_le(
-    le_path: str, labels: Optional[Iterable] = None, force: bool = False
-) -> LabelEncoder:
-    if os.path.isfile(le_path) and not force:
-        return joblib.load(le_path)
-    le = LabelEncoder()
-    le.fit(labels)
-    joblib.dump(le, le_path)
-    return le
-
-
-def _get_tokenized_texts(
-    tokenized_path: str, texts: Optional[Iterable[str]] = None, force: bool = False
-) -> Iterable[Iterable[str]]:
-    if os.path.isfile(tokenized_path) and not force:
-        with open(tokenized_path, "rb") as f:
-            return pickle.load(f)
-
-    tokenized_texts = tokenize(texts)
-    with open(tokenized_path, "wb") as f:
-        pickle.dump(tokenized_texts, f)
-
-    return tokenized_texts
-
-
-def _get_vocab(
-    vocab_path: str,
-    tokenized_texts: Optional[Iterable[Iterable[str]]] = None,
-    w2v_model_path: Optional[str] = None,
-    pad: str = "<PAD>",
-    unknown: str = "<UNK>",
-    force: bool = False,
-) -> np.ndarray:
-    if os.path.isfile(vocab_path) and not force:
-        return np.load(vocab_path, allow_pickle=True)
-
-    vocab = build_vocab(tokenized_texts, w2v_model_path, pad=pad, unknown=unknown)
-    np.save(vocab_path, vocab)
-    return vocab
+from .preprocessing import truncate_text
+from .utils import check_integrity, download_from_url, extract_archive
+from .utils.data import get_le, get_tokenized_texts, get_vocab
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -185,8 +136,8 @@ class TextDataset(Dataset):
                 texts, labels = npz["texts"], npz["labels"]
         else:
             texts, labels = self.raw_data()
-            tokenized_texts = _get_tokenized_texts(self.tokenized_path, texts)
-            vocab = _get_vocab(
+            tokenized_texts = get_tokenized_texts(self.tokenized_path, texts)
+            vocab = get_vocab(
                 self.vocab_path,
                 tokenized_texts,
                 self.w2v_model_path,
@@ -208,7 +159,7 @@ class TextDataset(Dataset):
 
             np.savez(npz_path, texts=texts, labels=labels)
 
-        le = _get_le(self.le_path, labels)
+        le = get_le(self.le_path, labels)
         labels = le.transform(labels)
         return torch.from_numpy(texts), torch.from_numpy(labels)
 
