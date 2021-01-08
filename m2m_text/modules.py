@@ -5,6 +5,8 @@ Created on 2020/12/31
 @author Sangwoo Han
 """
 
+from typing import List, Optional
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,12 +16,12 @@ import torch.nn.functional as F
 class Embedding(nn.Module):
     def __init__(
         self,
-        vocab_size=None,
-        emb_size=None,
-        emb_init=None,
-        emb_trainable=True,
-        padding_idx=0,
-        dropout=0.2,
+        vocab_size: Optional[int] = None,
+        emb_size: Optional[int] = None,
+        emb_init: Optional[np.ndarray] = None,
+        emb_trainable: bool = True,
+        padding_idx: int = 0,
+        dropout: bool = 0.2,
     ):
         super(Embedding, self).__init__()
         if emb_init is not None:
@@ -50,7 +52,9 @@ class Embedding(nn.Module):
 
 
 class LSTMEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size, layers_num, dropout):
+    def __init__(
+        self, input_size: int, hidden_size: int, layers_num: int, dropout: float
+    ):
         super(LSTMEncoder, self).__init__()
         self.lstm = nn.LSTM(
             input_size, hidden_size, layers_num, batch_first=True, bidirectional=True
@@ -86,7 +90,7 @@ class LSTMEncoder(nn.Module):
 
 
 class MLAttention(nn.Module):
-    def __init__(self, labels_num, hidden_size):
+    def __init__(self, labels_num: int, hidden_size: int):
         super(MLAttention, self).__init__()
         self.attention = nn.Linear(hidden_size, labels_num, bias=False)
         nn.init.xavier_uniform_(self.attention.weight)
@@ -101,7 +105,7 @@ class MLAttention(nn.Module):
 
 
 class MLLinear(nn.Module):
-    def __init__(self, linear_size, output_size):
+    def __init__(self, linear_size: List[int], output_size: int):
         super(MLLinear, self).__init__()
         self.linear = nn.ModuleList(
             nn.Linear(in_s, out_s)

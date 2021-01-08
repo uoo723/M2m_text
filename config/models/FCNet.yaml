@@ -1,0 +1,12 @@
+name: FCNet
+
+model:
+  linear_size: [512, 256]
+
+train:
+  input_opts:
+    return_hidden: true
+  gen_input_opts:
+    pass_hidden: true
+  last_input_opts:
+    pass_hidden: true

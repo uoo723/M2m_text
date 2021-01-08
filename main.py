@@ -18,15 +18,15 @@ from ruamel.yaml import YAML
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from m2m_text.datasets import DrugReview
-from m2m_text.networks import AttentionRNN
+from m2m_text.datasets import DrugReview, RCV1
+from m2m_text.networks import AttentionRNN, FCNet
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
 from m2m_text.utils.data import get_emb_init, get_le, get_oversampled_data
 from m2m_text.utils.model import load_checkpoint
 
-MODEL_CLS = {"AttentionRNN": AttentionRNN}
-DATASET_CLS = {"DrugReview": DrugReview}
+MODEL_CLS = {"AttentionRNN": AttentionRNN, "FCNet": FCNet}
+DATASET_CLS = {"DrugReview": DrugReview, "RCV1": RCV1}
 
 
 def set_logger(log_path: str):
@@ -341,6 +341,7 @@ def main(
         model_seed=network_g,
         step=eval_step,
         early=early,
+        **model_cnf.get("train", {}),
     )
     ##################################################################################
 

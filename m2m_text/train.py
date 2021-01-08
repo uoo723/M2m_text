@@ -69,6 +69,9 @@ def train_gen_step(
     random_start,
     gradient_norm_queue,
     gradient_max_norm,
+    input_opts={},
+    gen_input_opts={},
+    last_input_opts={},
 ):
     model.train()
     model_seed.eval()
@@ -85,7 +88,12 @@ def train_gen_step(
         gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
 
     with torch.no_grad():
-        orig_inputs, lengths, masks = model_seed(data_x, return_emb=True)
+        orig_inputs = model_seed(data_x, **input_opts)
+        if type(orig_inputs) == tuple:
+            orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
+        else:
+            other_inputs = None
+
         inputs = orig_inputs.clone()
 
     targets = data_y.clone()
@@ -104,7 +112,13 @@ def train_gen_step(
     select_idx = torch.multinomial(p_accept, 1, replacement=True).squeeze()
     p_accept = p_accept.gather(1, select_idx.unsqueeze(-1)).squeeze()
 
-    seed_inputs = (orig_inputs[select_idx], lengths[select_idx], masks[select_idx])
+    if other_inputs:
+        seed_inputs = (orig_inputs[select_idx],) + tuple(
+            inputs[select_idx] for inputs in other_inputs
+        )
+    else:
+        seed_inputs = orig_inputs[select_idx]
+
     seed_targets = data_y[select_idx]
 
     gen_inputs, correct_mask = generation(
@@ -121,6 +135,8 @@ def train_gen_step(
         step_size,
         random_start,
         attack_iter,
+        gen_input_opts,
+        last_input_opts,
     )
 
     num_gen = sum_t(correct_mask)
@@ -133,7 +149,12 @@ def train_gen_step(
         inputs[gen_c_idx] = gen_inputs_c
         targets[gen_c_idx] = gen_targets_c
 
-    outputs = model((inputs, lengths, masks), pass_emb=True)
+    if other_inputs:
+        model_inputs = (inputs, *other_inputs)
+    else:
+        model_inputs = inputs
+
+    outputs = model(model_inputs, **last_input_opts)
     loss = criterion(outputs, targets)
 
     optimizer.zero_grad()
@@ -161,11 +182,16 @@ def generation(
     step_size,
     random_start=True,
     max_iter=10,
+    gen_input_opts={},
+    last_input_opts={},
 ):
     model_g.eval()
     model_r.eval()
 
-    inputs, lengths, masks = inputs
+    if type(inputs) == tuple:
+        inputs, other_inputs = inputs[0], inputs[1:]
+    else:
+        other_inputs = None
 
     if random_start:
         random_noise = random_perturb(inputs, "l2", 0.5)
@@ -173,8 +199,14 @@ def generation(
 
     for _ in range(max_iter):
         inputs = inputs.clone().detach().requires_grad_(True)
-        outputs_g = model_g((inputs, lengths, masks), pass_emb=True, rnn_training=True)
-        outputs_r = model_r((inputs, lengths, masks), pass_emb=True, rnn_training=True)
+
+        if other_inputs:
+            model_inputs = (inputs, *other_inputs)
+        else:
+            model_inputs = inputs
+
+        outputs_g = model_g(model_inputs, **gen_input_opts)
+        outputs_r = model_r(model_inputs, **gen_input_opts)
 
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
             outputs_r, seed_targets
@@ -186,7 +218,12 @@ def generation(
 
     inputs = inputs.detach()
 
-    outputs_g = model_g((inputs, lengths, masks), pass_emb=True)
+    if other_inputs:
+        model_inputs = (inputs, *other_inputs)
+    else:
+        model_inputs = inputs
+
+    outputs_g = model_g(model_inputs, **last_input_opts)
 
     one_hot = torch.zeros_like(outputs_g)
     one_hot.scatter_(1, targets.view(-1, 1), 1)
@@ -229,6 +266,9 @@ def train(
     model_seed=None,
     step=100,
     early=50,
+    input_opts={},  # To be passed to train_gen_step()
+    gen_input_opts={},  # Te be passed to gneration()
+    last_input_opts={},  # To be passed to train_gen_step() at the last phase of generation
 ):
     global_step, best, e = 0, 0.0, 0
 
@@ -276,6 +316,9 @@ def train(
                     random_start,
                     gradient_norm_queue,
                     gradient_max_norm,
+                    input_opts=input_opts,
+                    gen_input_opts=gen_input_opts,
+                    last_input_opts=last_input_opts,
                 )
             else:
                 loss = train_step(
