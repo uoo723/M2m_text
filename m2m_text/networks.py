@@ -53,6 +53,7 @@ class AttentionRNN(Network):
         pass_emb=False,
         return_hidden=False,
         pass_hidden=False,
+        rnn_training=False,
         **kwargs
     ):
         if return_emb and pass_emb:
@@ -78,7 +79,7 @@ class AttentionRNN(Network):
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
 
         if not pass_hidden:
-            rnn_out = self.lstm(emb_out, lengths)  # N, L, hidden_size * 2
+            rnn_out = self.lstm(emb_out, lengths, training=rnn_training)  # N, L, hidden_size * 2
         else:
             rnn_out, lengths, masks = inputs
 

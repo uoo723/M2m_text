@@ -58,7 +58,7 @@ class LSTMEncoder(nn.Module):
         self.init_state = nn.Parameter(torch.zeros(2 * 2 * layers_num, 1, hidden_size))
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, inputs, lengths, **kwargs):
+    def forward(self, inputs, lengths, training=False, **kwargs):
         self.lstm.flatten_parameters()
         init_state = self.init_state.repeat([1, inputs.size(0), 1])
         cell_init, hidden_init = (
@@ -69,9 +69,19 @@ class LSTMEncoder(nn.Module):
         packed_inputs = nn.utils.rnn.pack_padded_sequence(
             inputs[idx], lengths.cpu()[idx], batch_first=True
         )
+
+        training_state = self.lstm.training
+
+        if training:
+            self.lstm.train()
+
         outputs, _ = nn.utils.rnn.pad_packed_sequence(
             self.lstm(packed_inputs, (hidden_init, cell_init))[0], batch_first=True
         )
+
+        if training:
+            self.lstm.train(training_state)
+
         return self.dropout(outputs[torch.argsort(idx)])
 
 

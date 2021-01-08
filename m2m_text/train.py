@@ -162,8 +162,8 @@ def generation(
     random_start=True,
     max_iter=10,
 ):
-    model_g.train()
-    model_r.train()
+    model_g.eval()
+    model_r.eval()
 
     inputs, lengths, masks = inputs
 
@@ -173,8 +173,8 @@ def generation(
 
     for _ in range(max_iter):
         inputs = inputs.clone().detach().requires_grad_(True)
-        outputs_g = model_g((inputs, lengths, masks), pass_emb=True)
-        outputs_r = model_r((inputs, lengths, masks), pass_emb=True)
+        outputs_g = model_g((inputs, lengths, masks), pass_emb=True, rnn_training=True)
+        outputs_r = model_r((inputs, lengths, masks), pass_emb=True, rnn_training=True)
 
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
             outputs_r, seed_targets
@@ -194,7 +194,6 @@ def generation(
 
     correct = (probs_g >= gamma) * torch.bernoulli(p_accept).long().to(device)
 
-    model_g.eval()
     model_r.train()
 
     return inputs, correct

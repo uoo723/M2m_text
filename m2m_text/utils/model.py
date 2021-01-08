@@ -8,10 +8,8 @@ from typing import Union, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn.modules.module import register_module_forward_hook
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.serialization import register_package
 
 
 def save_checkpoint(
