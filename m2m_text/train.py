@@ -233,13 +233,16 @@ def train(
 ):
     global_step, best, e = 0, 0.0, 0
 
-    gradient_norm_queue = (
-        deque([np.inf], maxlen=5) if gradient_max_norm is not None else None
-    )
-
     n_samples_per_class_tensor = torch.tensor(n_samples_per_class).to(device)
 
     swa_state = other_states.get("swa_state", {})
+
+    if gradient_max_norm is not None:
+        gradient_norm_queue = other_states.get(
+            "gradient_norm_queue", deque([np.inf], maxlen=5)
+        )
+    else:
+        gradient_norm_queue = None
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -301,6 +304,7 @@ def train(
                 if results["acc"] > best:
                     other_states = {
                         "swa_state": swa_state,
+                        "gradient_norm_queue": gradient_norm_queue,
                     }
                     save_checkpoint(
                         ckpt_path,
