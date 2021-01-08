@@ -41,18 +41,20 @@ def save_checkpoint(
 
 def load_checkpoint(
     ckpt_path: str,
-    model: Union[nn.DataParallel, nn.Module],
+    model: Optional[Union[nn.DataParallel, nn.Module]] = None,
     optim: Optional[Optimizer] = None,
     scheduler: Optional[_LRScheduler] = None,
     set_rng_state: bool = True,
     return_other_states: bool = False,
+    **torch_load_args,
 ) -> int:
-    ckpt = torch.load(ckpt_path)
+    ckpt = torch.load(ckpt_path, **torch_load_args)
 
-    if isinstance(model, nn.DataParallel):
-        model = model.module
+    if model is not None:
+        if isinstance(model, nn.DataParallel):
+            model = model.module
 
-    model.load_state_dict(ckpt["net"])
+        model.load_state_dict(ckpt["net"])
 
     if optim:
         optim.load_state_dict(ckpt["optimizer"])

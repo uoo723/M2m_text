@@ -282,10 +282,13 @@ def main(
 
     if net_t is not None:
         logger.info("Resume training")
-        start_epoch = load_checkpoint(net_t, network, optimizer, scheduler)
+        start_epoch, other_states = load_checkpoint(
+            net_t, network, optimizer, scheduler, return_other_states=True
+        )
         start_epoch += 1
     else:
         start_epoch = 0
+        other_states = {}
 
     if net_g:
         if isinstance(network, nn.DataParallel):
@@ -332,6 +335,7 @@ def main(
         lam,
         step_size,
         attack_iter,
+        other_states=other_states,
         gamma=gamma,
         random_start=True,
         model_seed=network_g,

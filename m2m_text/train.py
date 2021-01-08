@@ -224,6 +224,7 @@ def train(
     step_size,
     attack_iter,
     random_start,
+    other_states={},  # To resume training
     gamma=None,
     imb_type="longtail",
     model_seed=None,
@@ -238,11 +239,7 @@ def train(
 
     n_samples_per_class_tensor = torch.tensor(n_samples_per_class).to(device)
 
-    if os.path.exists(ckpt_path):
-        states = torch.load(ckpt_path)
-        swa_state = states.get("swa_state", {})
-    else:
-        swa_state = {}
+    swa_state = other_states.get("swa_state", {})
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
