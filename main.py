@@ -291,10 +291,10 @@ def main(
         other_states = {}
 
     if net_g:
-        if isinstance(network, nn.DataParallel):
-            network.module.emb.emb.weight.data = network_g.module.emb.emb.weight.data
-        else:
-            network.emb.emb.weight.data = network_g.emb.emb.weight.data
+        # if isinstance(network, nn.DataParallel):
+        #     network.module.emb.emb.weight.data = network_g.module.emb.emb.weight.data
+        # else:
+        #     network.emb.emb.weight.data = network_g.emb.emb.weight.data
 
         if not no_over_gen:
             train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
