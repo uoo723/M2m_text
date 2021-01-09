@@ -82,7 +82,7 @@ class TextDataset(Dataset):
         if fpath:
             extract_archive(fpath)
 
-    def load_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def load_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load data, preprocessing if needed."""
         npz_path = os.path.join(
             self.data_dir, self.train_npz if self.train else self.test_npz
@@ -122,7 +122,7 @@ class TextDataset(Dataset):
 
         le = get_le(self.le_path, labels)
         labels = le.transform(labels)
-        return torch.from_numpy(texts), torch.from_numpy(labels)
+        return texts, labels
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Retrun raw data for preprocessing"""
@@ -183,7 +183,7 @@ class DrugReview(TextDataset):
         return len(self.texts)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.texts[index], self.labels[index]
+        return torch.from_numpy(self.texts[index]), torch.from_numpy(self.labels[index])
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         csv_path = os.path.join(

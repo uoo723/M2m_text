@@ -342,7 +342,7 @@ def train(
                     for batch in valid_loader
                 ]
                 labels = np.concatenate(labels)
-                targets = valid_loader.dataset.y.numpy()
+                targets = valid_loader.dataset.y
 
                 results = get_accuracy(labels, targets, num_classes)
 
