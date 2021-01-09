@@ -131,7 +131,7 @@ class FCNet(nn.Module):
         dropout = self.dropout_p
 
         self.linear = MLLinear([input_size] + linear_size[:-1], linear_size[-1])
-        self.output = MLLinear(linear_size[-1], labels_num)
+        self.output = MLLinear(linear_size[-1:], labels_num)
         self.dropout = nn.Dropout(dropout)
 
         self._built = True
