@@ -5,7 +5,7 @@ Created on 2020/12/31
 @author Sangwoo Han
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
@@ -18,13 +18,15 @@ class Embedding(nn.Module):
         self,
         vocab_size: Optional[int] = None,
         emb_size: Optional[int] = None,
-        emb_init: Optional[np.ndarray] = None,
+        emb_init: Optional[Union[np.ndarray, str]] = None,
         emb_trainable: bool = True,
         padding_idx: int = 0,
         dropout: bool = 0.2,
     ):
         super(Embedding, self).__init__()
         if emb_init is not None:
+            if type(emb_init) == str:
+                emb_init = np.load(emb_init)
             if vocab_size is not None:
                 assert vocab_size == emb_init.shape[0]
             if emb_size is not None:
