@@ -211,10 +211,12 @@ def generation(
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
             outputs_r, seed_targets
         )
-        (grad,) = torch.autograd.grad(loss, [inputs])
+        (grad,) = torch.autograd.grad(loss, [model_inputs])
 
-        inputs = inputs - make_step(grad, "l2", step_size, torch.Size([-1, 1, 1]))
-        inputs = torch.clamp(inputs, 0, 1)
+        model_inputs = model_inputs - make_step(
+            grad, "l2", step_size, torch.Size([-1, 1, 1])
+        )
+        model_inputs = torch.clamp(model_inputs, 0, 1)
 
     inputs = inputs.detach()
 
