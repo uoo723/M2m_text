@@ -379,7 +379,7 @@ def train(
         if scheduler is not None:
             scheduler.step()
 
-    last_ckpt_path, ext = os.path.split(ckpt_path)
+    last_ckpt_path, ext = os.path.splitext(ckpt_path)
     last_ckpt_path += "_last" + ext
 
     save_checkpoint(
