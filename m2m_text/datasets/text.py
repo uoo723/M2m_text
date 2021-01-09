@@ -183,7 +183,9 @@ class DrugReview(TextDataset):
         return len(self.texts)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return torch.from_numpy(self.texts[index]), torch.from_numpy(self.labels[index])
+        return torch.from_numpy(self.texts[index]), torch.from_numpy(
+            self.labels[index, None].squeeze()
+        )
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         csv_path = os.path.join(
