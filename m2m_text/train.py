@@ -283,6 +283,9 @@ def train(
     else:
         gradient_norm_queue = None
 
+    epoch = start_epoch
+    results = {"acc": 0.0}
+
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
             swa_init(model, swa_state)
@@ -343,11 +346,12 @@ def train(
 
                 results = get_accuracy(labels, targets, num_classes)
 
+                other_states = {
+                    "swa_state": swa_state,
+                    "gradient_norm_queue": gradient_norm_queue,
+                }
+
                 if results["acc"] > best:
-                    other_states = {
-                        "swa_state": swa_state,
-                        "gradient_norm_queue": gradient_norm_queue,
-                    }
                     save_checkpoint(
                         ckpt_path,
                         model,
@@ -374,6 +378,19 @@ def train(
 
         if scheduler is not None:
             scheduler.step()
+
+    last_ckpt_path, ext = os.path.split(ckpt_path)
+    last_ckpt_path += "_last" + ext
+
+    save_checkpoint(
+        last_ckpt_path,
+        model,
+        optimizer,
+        results["acc"],
+        epoch,
+        scheduler=scheduler,
+        other_states=other_states,
+    )
 
 
 def predict_step(model, data_x):
