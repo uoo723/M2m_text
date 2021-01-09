@@ -100,7 +100,7 @@ class RCV1(SparseDataset):
         return self._x.shape[0]
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return torch.from_numpy(self._x[index].toarray()), torch.from_numpy(
+        return torch.from_numpy(self._x[index].toarray().squeeze()), torch.from_numpy(
             self._y[index, None].squeeze()
         )
 
