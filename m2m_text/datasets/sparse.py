@@ -74,11 +74,11 @@ class RCV1(SparseDataset):
     url = "https://drive.google.com/uc?id=1oLaGER_HEDIwAg89S92_WLbAMCRIinJY"
 
     filename = "rcv1.tar.gz"
-    tgz_md5 = "5a122af1c6331f2276b0f20c59334a3f"
+    tgz_md5 = "8ef765863ee5838f839e5b732467377a"
 
     file_list = [
-        ("train.npz", "de6b46472356af41fa389b041c0dfb80"),
-        ("test.npz", "6b35bc2922c4b5b73182e069d80fc3a3"),
+        ("train.npz", "0400ba9044ee589f2018eb11f41eb90c"),
+        ("test.npz", "0ed50f3c8d4f5581fda4ff33d0aa521d"),
     ]
 
     train_npz = "train.npz"
