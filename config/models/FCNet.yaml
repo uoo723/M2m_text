@@ -2,6 +2,7 @@ name: FCNet
 
 model:
   linear_size: [512, 256]
+  input_size: 21531  # RCV1
 
 train:
   input_opts:

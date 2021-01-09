@@ -7,6 +7,7 @@ model:
   dropout: 0.5
   emb_trainable: false
   emb_size: 300
+  emb_init: data/drugReview/emb_init.npy  # drugReview
 
 train:
   input_opts:

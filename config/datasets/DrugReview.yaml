@@ -1,7 +1,6 @@
 name: DrugReview
 
 valid_size: 0.1
-emb_init: data/drugReview/emb_init.npy
 
 dataset:
   maxlen: 200
