@@ -193,6 +193,9 @@ def generation(
     else:
         other_inputs = None
 
+    input_dim = len(inputs.shape) - 1
+    input_gen_size = torch.Size([-1] + [1] * input_dim)
+
     if random_start:
         random_noise = random_perturb(inputs, "l2", 0.5)
         inputs = torch.clamp(inputs + random_noise, 0, 1)
@@ -214,7 +217,7 @@ def generation(
         (grad,) = torch.autograd.grad(loss, [inputs])
 
         inputs = inputs - make_step(
-            grad, "l2", step_size, torch.Size([-1, 1, 1])
+            grad, "l2", step_size, input_gen_size
         )
         inputs = torch.clamp(inputs, 0, 1)
 
