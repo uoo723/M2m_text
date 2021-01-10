@@ -86,6 +86,17 @@ class TextDataset(Dataset):
             extract_archive(fpath)
 
     def load_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        train_npz_path = os.path.join(self.data_dir, self.train_npz)
+        npz_path = os.path.join(
+            self.data_dir, self.train_npz if self.train else self.test_npz
+        )
+
+        if not os.path.isfile(train_npz_path):
+            self._load_data(train_npz_path)
+
+        return self._load_data(npz_path)
+
+    def _load_data(self, npz_path: str) -> Tuple[np.ndarray, np.ndarray]:
         """Load data, preprocessing if needed."""
         npz_path = os.path.join(
             self.data_dir, self.train_npz if self.train else self.test_npz
