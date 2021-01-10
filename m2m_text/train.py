@@ -165,7 +165,7 @@ def train_gen_step(
 
     optimizer.step()
 
-    return loss.item()
+    return loss.item(), num_gen
 
 
 def generation(
@@ -217,7 +217,6 @@ def generation(
         (grad,) = torch.autograd.grad(loss, [inputs])
 
         inputs = inputs - make_step(grad, "l2", step_size, input_gen_size)
-        inputs = torch.clamp(inputs, 0, 1)
 
     inputs = inputs.detach()
 
@@ -289,6 +288,7 @@ def train(
 
     epoch = start_epoch
     results = {"acc": 0.0, "bal_acc": 0.0}
+    num_gen_list = deque(maxlen=50)
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -305,7 +305,7 @@ def train(
             global_step += 1
             if epoch >= warm and gen:
                 # print(train_inputs[0].dtype)
-                loss = train_gen_step(
+                loss, num_gen = train_gen_step(
                     model,
                     model_seed,
                     criterion,
@@ -327,6 +327,7 @@ def train(
                     gen_input_opts=gen_input_opts,
                     last_input_opts=last_input_opts,
                 )
+                num_gen_list.append(num_gen)
             else:
                 loss = train_step(
                     model,
@@ -377,6 +378,9 @@ def train(
                     f"acc: {round(results['acc'], 5)} "
                     f"bal_acc: {round(results['bal_acc'], 5)}"
                 )
+
+                if len(num_gen_list) > 0:
+                    logger.info(f"Avg # of gen: {np.mean(num_gen_list)}")
 
         if scheduler is not None:
             scheduler.step()
