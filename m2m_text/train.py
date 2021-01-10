@@ -390,8 +390,8 @@ def train(
                 logger.info(
                     f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
                     f"early stop: {e} "
-                    f"acc: {round(results['acc'], 5)} "
-                    f"bal_acc: {round(results['bal_acc'], 5)}" + gen_log_msg
+                    f"acc: {round(results['acc'], 4)} "
+                    f"bal acc: {round(results['bal_acc'], 4)}" + gen_log_msg
                 )
 
         if scheduler is not None:
@@ -430,5 +430,5 @@ def evaluate(model, dataloader, targets, num_classes, device, le):
     results = get_accuracy(le.classes_[labels], targets)
 
     logger.info(
-        f"acc: {round(results['acc'], 5)} bal_acc: {round(results['bal_acc'], 5)}"
+        f"acc: {round(results['acc'], 4)} bal acc: {round(results['bal_acc'], 4)}"
     )
