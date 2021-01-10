@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from ..preprocessing import truncate_text
 from ..utils import download_from_url, extract_archive
-from ..utils.data import get_le, get_tokenized_texts, get_vocab
+from ..utils.data import get_emb_init, get_le, get_tokenized_texts, get_vocab
 from ._base import Dataset, TDataX, TDataY
 
 
@@ -34,6 +34,7 @@ class TextDataset(Dataset):
         vocab_filename (str): Vocab filename.
         tokenized_filename (str): Tokenized text filename.
         label_encoder_filename (str): Label encoder filename
+        emb_init_filename (str): emb init filename
         maxlen (int): Max length of texts.
         pad (str): Pad token.
         unknwon (str): Unknwon token.
@@ -44,6 +45,7 @@ class TextDataset(Dataset):
         vocab_filename: str = "vocab.npy",
         tokenized_filename: str = "tokenized_texts.pkl",
         label_encoder_filename: str = "label_encoder",
+        emb_init_filename: str = "emb_init.npy",
         maxlen: int = 500,
         pad: str = "<PAD>",
         unknown: str = "<UNK>",
@@ -57,6 +59,7 @@ class TextDataset(Dataset):
         )
         self.le_path = os.path.join(self.data_dir, label_encoder_filename)
         self.w2v_model_path = os.path.join(self.root, self.w2v_model)
+        self.emb_init_path = os.path.join(self.data_dir, emb_init_filename)
         self.pad = pad
         self.unknown = unknown
         self.maxlen = maxlen
@@ -122,6 +125,11 @@ class TextDataset(Dataset):
 
         le = get_le(self.le_path, labels)
         labels = le.transform(labels)
+
+        self.emb_init = get_emb_init(
+            self.emb_init_path, self.vocab_path, self.w2v_model_path
+        )
+
         return texts, labels
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
