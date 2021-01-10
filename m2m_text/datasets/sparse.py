@@ -61,7 +61,7 @@ class SparseDataset(Dataset):
 
 
 class RCV1(SparseDataset):
-    """`RCV1 <https://https://archive.ics.uci.edu/ml/datasets/Reuters+RCV1+RCV2+Multilingual,+Multiview+Text+Categorization+Test+collection>`_ Dataset.
+    """`RCV1 <https://archive.ics.uci.edu/ml/datasets/Reuters+RCV1+RCV2+Multilingual,+Multiview+Text+Categorization+Test+collection>`_ Dataset.
 
     Args:
         root (string, optional): Root directory of dataset. default: ./data
