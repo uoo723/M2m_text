@@ -25,4 +25,5 @@ def get_accuracy(labels: np.ndarray, targets: np.ndarray):
     return {
         "acc": correct / correct_total,
         "bal_acc": bal_acc,
+        'per_class': per_class,
     }
