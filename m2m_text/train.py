@@ -88,7 +88,7 @@ def train_gen_step(
         gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
 
     with torch.no_grad():
-        orig_inputs = model_seed(data_x, **input_opts)
+        orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
         if type(orig_inputs) == tuple:
             orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
         else:

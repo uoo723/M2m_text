@@ -42,7 +42,7 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
 
 
-@click.command(context_settings={'show_default': True})
+@click.command(context_settings={"show_default": True})
 @click.option("--test-run", is_flag=True, default=False, help="Test run mode for debug")
 @click.option("--log-dir", type=click.Path(), default="./logs", help="Log dir")
 @click.option("--seed", type=click.INT, default=0, help="Seed for reproducibility")
@@ -130,8 +130,8 @@ def set_seed(seed: int):
 )
 @click.option(
     "--early-criterion",
-    type=click.Choice(['acc', 'bal_acc']),
-    default='bal_acc',
+    type=click.Choice(["acc", "bal_acc"]),
+    default="bal_acc",
     help="Early stopping criterion",
 )
 def main(
