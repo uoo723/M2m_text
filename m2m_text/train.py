@@ -288,6 +288,7 @@ def train(
 
     epoch = start_epoch
     results = {"acc": 0.0, "bal_acc": 0.0}
+    num_gen_list = deque(maxlen=50)
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -326,6 +327,9 @@ def train(
                     gen_input_opts=gen_input_opts,
                     last_input_opts=last_input_opts,
                 )
+
+                num_gen_list.append(num_gen)
+
                 if num_gen == 0:
                     logger.warn("There is no generation")
             else:
@@ -372,11 +376,16 @@ def train(
                     if early is not None and e > early:
                         return
 
+                if len(num_gen_list) > 0:
+                    gen_log_msg = f" avg gen: {round(np.mean(num_gen_list), 2)}"
+                else:
+                    gen_log_msg = ""
+
                 logger.info(
                     f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
                     f"early stop: {e} "
                     f"acc: {round(results['acc'], 5)} "
-                    f"bal_acc: {round(results['bal_acc'], 5)}"
+                    f"bal_acc: {round(results['bal_acc'], 5)}" + gen_log_msg
                 )
 
         if scheduler is not None:
