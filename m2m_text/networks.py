@@ -110,12 +110,14 @@ class FCNet(nn.Module):
     def __init__(
         self,
         labels_num: int,
+        encoder_linear_size: List[int],
         linear_size: List[int],
         input_size: Optional[int] = None,
         dropout: float = 0.2,
     ):
         super().__init__()
         self.labels_num = labels_num
+        self.encoder_linear_size = encoder_linear_size
         self.linear_size = linear_size
         self.input_size = input_size
         self.dropout_p = dropout
@@ -126,12 +128,13 @@ class FCNet(nn.Module):
 
     def _build(self):
         input_size = self.input_size
+        encoder_linear_size = self.encoder_linear_size
         linear_size = self.linear_size
         labels_num = self.labels_num
         dropout = self.dropout_p
 
-        self.linear = MLLinear([input_size] + linear_size[:-1], linear_size[-1])
-        self.output = MLLinear(linear_size[-1:], labels_num)
+        self.encoder = MLLinear([input_size] + encoder_linear_size)
+        self.linear = MLLinear(encoder_linear_size[-1:] + linear_size, labels_num)
         self.dropout = nn.Dropout(dropout)
 
         self._built = True
@@ -139,15 +142,15 @@ class FCNet(nn.Module):
     def forward(
         self,
         inputs: torch.Tensor,
-        return_hidden: bool = False,
-        pass_hidden: bool = False,
+        return_emb: bool = False,
+        pass_emb: bool = False,
     ) -> torch.Tensor:
         """Forward inputs
 
         Args:
             inputs (torch.Tensor): Input tensor with shape (batch_size, input_size).
-            return_hidden (bool): Return hidden if true. default: False.
-            pass_hidden (bool): Treat inputs tensor as a hidden if true. default: False.
+            return_emb (bool): Return hidden if true. default: False.
+            pass_emb (bool): Treat inputs tensor as a hidden if true. default: False.
 
         Returns:
             outputs (torch.Tensor): Output tensor.
@@ -156,14 +159,14 @@ class FCNet(nn.Module):
             self.input_size = inputs.size(-1)
             self._build()
 
-        if return_hidden and pass_hidden:
+        if return_emb and pass_emb:
             raise ValueError("`return_hidden` and `pass_hidden` both cannot be True")
 
-        if return_hidden:
-            return self.linear(inputs)
+        if return_emb:
+            return self.encoder(inputs)
 
-        if pass_hidden:
-            return self.output(self.dropout(F.relu(inputs)))
+        if pass_emb:
+            return self.linear(self.dropout(F.relu(inputs)))
 
-        outputs = self.linear(inputs)
-        return self.output(self.dropout(F.relu(outputs)))
+        outputs = self.encoder(inputs)
+        return self.linear(self.dropout(F.relu(outputs)))
