@@ -133,7 +133,9 @@ class FCNet(nn.Module):
         labels_num = self.labels_num
         dropout = self.dropout_p
 
-        self.encoder = MLLinear([input_size] + encoder_linear_size)
+        self.encoder = MLLinear(
+            [input_size] + encoder_linear_size[:-1], encoder_linear_size[-1]
+        )
         self.linear = MLLinear(encoder_linear_size[-1:] + linear_size, labels_num)
         self.dropout = nn.Dropout(dropout)
 
