@@ -121,7 +121,7 @@ def train_gen_step(
 
     seed_targets = data_y[select_idx]
 
-    gen_inputs, correct_mask = generation(
+    gen_inputs, correct_mask, max_prob, mean_prob = generation(
         model,
         model_seed,
         criterion,
@@ -165,7 +165,7 @@ def train_gen_step(
 
     optimizer.step()
 
-    return loss.item(), num_gen
+    return loss.item(), num_gen, max_prob, mean_prob
 
 
 def generation(
@@ -231,11 +231,14 @@ def generation(
     one_hot.scatter_(1, targets.view(-1, 1), 1)
     probs_g = torch.softmax(outputs_g, dim=1)[one_hot.to(torch.bool)]
 
+    max_prob = probs_g.max().item()
+    mean_prob = probs_g.mean().item()
+
     correct = (probs_g >= gamma) * torch.bernoulli(p_accept).long().to(device)
 
     model_r.train()
 
-    return inputs, correct
+    return inputs, correct, max_prob, mean_prob
 
 
 def train(
@@ -304,8 +307,7 @@ def train(
             train_inputs = tuple(batch.to(device) for batch in train_inputs)
             global_step += 1
             if epoch >= warm and gen:
-                # print(train_inputs[0].dtype)
-                loss, num_gen = train_gen_step(
+                loss, num_gen, max_prob, mean_prob = train_gen_step(
                     model,
                     model_seed,
                     criterion,
@@ -331,7 +333,11 @@ def train(
                 num_gen_list.append(num_gen)
 
                 if num_gen == 0:
-                    logger.warn("There is no generation")
+                    logger.warn(
+                        f"There is no generation. "
+                        f"max_prob: {max_prob} "
+                        f"mean_prob: {mean_prob}"
+                    )
             else:
                 loss = train_step(
                     model,
