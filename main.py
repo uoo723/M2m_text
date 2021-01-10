@@ -128,6 +128,12 @@ def set_seed(seed: int):
     default=50,
     help="Early stopping step",
 )
+@click.option(
+    "--early-criterion",
+    type=click.Choice(['acc', 'bal_acc']),
+    default='bal_acc',
+    help="Early stopping criterion",
+)
 def main(
     test_run,
     log_dir,
@@ -158,6 +164,7 @@ def main(
     no_over_gen,
     eval_step,
     early,
+    early_criterion,
 ):
     yaml = YAML(typ="safe")
     model_cnf = yaml.load(Path(model_cnf))
@@ -341,6 +348,7 @@ def main(
         model_seed=network_g,
         step=eval_step,
         early=early,
+        early_criterion=early_criterion,
         **model_cnf.get("train", {}),
     )
     ##################################################################################

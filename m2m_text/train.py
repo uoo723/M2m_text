@@ -216,9 +216,7 @@ def generation(
         )
         (grad,) = torch.autograd.grad(loss, [inputs])
 
-        inputs = inputs - make_step(
-            grad, "l2", step_size, input_gen_size
-        )
+        inputs = inputs - make_step(grad, "l2", step_size, input_gen_size)
         inputs = torch.clamp(inputs, 0, 1)
 
     inputs = inputs.detach()
@@ -271,6 +269,7 @@ def train(
     model_seed=None,
     step=100,
     early=50,
+    early_criterion="acc",
     input_opts={},  # To be passed to train_gen_step()
     gen_input_opts={},  # Te be passed to gneration()
     last_input_opts={},  # To be passed to train_gen_step() at the last phase of generation
@@ -289,7 +288,7 @@ def train(
         gradient_norm_queue = None
 
     epoch = start_epoch
-    results = {"acc": 0.0}
+    results = {"acc": 0.0, "bal_acc": 0.0}
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -349,24 +348,24 @@ def train(
                 labels = np.concatenate(labels)
                 targets = valid_loader.dataset.y
 
-                results = get_accuracy(labels, targets, num_classes)
+                results = get_accuracy(labels, targets)
 
                 other_states = {
                     "swa_state": swa_state,
                     "gradient_norm_queue": gradient_norm_queue,
                 }
 
-                if results["acc"] > best:
+                if results[early_criterion] > best:
                     save_checkpoint(
                         ckpt_path,
                         model,
                         optimizer,
-                        results["acc"],
+                        results,
                         epoch,
                         scheduler=scheduler,
                         other_states=other_states,
                     )
-                    best, e = results["acc"], 0
+                    best, e = results[early_criterion], 0
                 else:
                     e += 1
                     if early is not None and e > early:
@@ -374,11 +373,9 @@ def train(
 
                 logger.info(
                     f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
+                    f"early stop: {e} "
                     f"acc: {round(results['acc'], 5)} "
-                    # f"major acc: {round(results['major_acc'], 5)} "
-                    # f"minor acc: {round(results['minor_acc'], 5)} "
-                    # f"neutral acc: {round(results['neutral_acc'], 5)} "
-                    f"early stop: {e}"
+                    f"bal_acc: {round(results['bal_acc'], 5)}"
                 )
 
         if scheduler is not None:
@@ -391,7 +388,7 @@ def train(
         last_ckpt_path,
         model,
         optimizer,
-        results["acc"],
+        results,
         epoch,
         scheduler=scheduler,
         other_states=other_states,
@@ -414,11 +411,8 @@ def evaluate(model, dataloader, targets, num_classes, device, le):
 
     labels = np.concatenate(labels)
 
-    results = get_accuracy(le.classes_[labels], targets, num_classes)
+    results = get_accuracy(le.classes_[labels], targets)
 
     logger.info(
-        f"acc: {round(results['acc'], 5)} "
-        # f"major acc: {round(results['major_acc'], 5)} "
-        # f"minor acc: {round(results['minor_acc'], 5)} "
-        # f"neutral acc: {round(results['neutral_acc'], 5)} "
+        f"acc: {round(results['acc'], 5)} bal_acc: {round(results['bal_acc'], 5)}"
     )

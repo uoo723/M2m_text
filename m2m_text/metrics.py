@@ -3,36 +3,26 @@ Created on 2021/01/05
 @author Sangwoo Han
 """
 
+import numpy as np
+from sklearn.metrics import confusion_matrix
 
-def get_accuracy(labels, targets, num_classes):
+
+def get_accuracy(labels: np.ndarray, targets: np.ndarray):
     correct_mask = labels == targets
     correct_total = len(targets)
     correct = correct_mask.sum()
 
-    # major_mask = targets < num_classes // 3
-    # major_total = major_mask.sum()
-    # major_correct = (correct_mask * major_mask).sum()
+    c_matrix = confusion_matrix(labels, targets)
 
-    # minor_mask = targets >= num_classes - num_classes // 3
-    # minor_total = minor_mask.sum()
-    # minor_correct = (correct_mask * minor_mask).sum()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        per_class = np.diag(c_matrix) / c_matrix.sum(axis=1)
 
-    # neutral_mask = ~(major_mask + minor_mask)
-    # neutral_total = neutral_mask.sum()
-    # neutral_correct = (correct_mask * neutral_mask).sum()
+    if np.any(np.isnan(per_class)):
+        per_class = per_class[~np.isnan(per_class)]
 
-    # class_correct = np.zeros(num_classes)
-    # class_total = np.zeros(num_classes)
-
-    # for i in range(num_classes):
-    #     class_mask = targets == i
-    #     class_total[i] = class_mask.sum()
-    #     class_correct[i] = (correct_mask * class_mask).sum()
+    bal_acc = np.mean(per_class)
 
     return {
         "acc": correct / correct_total,
-        # "major_acc": major_correct / major_total,
-        # "minor_acc": minor_correct / minor_total,
-        # "neutral_acc": neutral_correct / neutral_total,
-        # "class_acc": class_correct / class_total,
+        "bal_acc": bal_acc,
     }

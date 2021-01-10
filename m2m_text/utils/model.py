@@ -16,7 +16,7 @@ def save_checkpoint(
     ckpt_path: str,
     model: Union[nn.DataParallel, nn.Module],
     optim: Optimizer,
-    acc: float,
+    results: dict,
     epoch: int,
     scheduler: Optional[_LRScheduler] = None,
     other_states: dict = {},
@@ -27,7 +27,7 @@ def save_checkpoint(
     state = {
         "net": model.state_dict(),
         "optimizer": optim.state_dict(),
-        "acc": acc,
+        "results": results,
         "epoch": epoch,
         "rng_state": (torch.get_rng_state(), np.random.get_state(), random.getstate()),
         **({} if scheduler is None else {"scheduler": scheduler.state_dict()}),
