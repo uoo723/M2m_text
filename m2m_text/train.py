@@ -335,8 +335,8 @@ def train(
                 if num_gen == 0:
                     logger.warn(
                         f"There is no generation. "
-                        f"max_prob: {round(max_prob, 4)} "
-                        f"mean_prob: {round(mean_prob, 4)}"
+                        f"max prob: {round(max_prob, 4)} "
+                        f"mean prob: {round(mean_prob, 4)}"
                     )
             else:
                 loss = train_step(
