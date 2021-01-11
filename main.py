@@ -43,6 +43,12 @@ def set_seed(seed: int):
 
 
 @click.command(context_settings={"show_default": True})
+@click.option(
+    "--mode",
+    type=click.Choice(["train", "eval"]),
+    default="train",
+    help="train: train and eval are executed. eval: eval only",
+)
 @click.option("--test-run", is_flag=True, default=False, help="Test run mode for debug")
 @click.option("--log-dir", type=click.Path(), default="./logs", help="Log dir")
 @click.option("--seed", type=click.INT, default=0, help="Seed for reproducibility")
@@ -135,6 +141,7 @@ def set_seed(seed: int):
     help="Early stopping criterion",
 )
 def main(
+    mode,
     test_run,
     log_dir,
     seed,
@@ -275,77 +282,83 @@ def main(
     ##################################################################################
 
     ################################### Training #####################################
-    criteron = nn.CrossEntropyLoss()
-    optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=max(3, epoch // 10), eta_min=1e-4)
-
-    if net_t is not None:
-        logger.info("Resume training")
-        start_epoch, other_states = load_checkpoint(
-            net_t, network, optimizer, scheduler, return_other_states=True
+    if mode == "train":
+        criteron = nn.CrossEntropyLoss()
+        optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
+        scheduler = CosineAnnealingLR(
+            optimizer, T_max=max(3, epoch // 10), eta_min=1e-4
         )
-        start_epoch += 1
-    else:
-        start_epoch = 0
-        other_states = {}
 
-    if net_g:
-        # if isinstance(network, nn.DataParallel):
-        #     network.module.emb.emb.weight.data = network_g.module.emb.emb.weight.data
-        # else:
-        #     network.emb.emb.weight.data = network_g.emb.emb.weight.data
-
-        if not no_over_gen:
-            train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
-            train_over_loader = DataLoader(
-                train_dataset,
-                sampler=WeightedRandomSampler(train_weights, len(train_weights)),
-                num_workers=num_workers,
-                pin_memory=False if no_cuda else True,
-                batch_size=train_batch_size,
+        if net_t is not None:
+            logger.info("Resume training")
+            start_epoch, other_states = load_checkpoint(
+                net_t, network, optimizer, scheduler, return_other_states=True
             )
+            start_epoch += 1
+        else:
+            start_epoch = 0
+            other_states = {}
+
+        if net_g:
+            # if isinstance(network, nn.DataParallel):
+            #     network.module.emb.emb.weight.data = network_g.module.emb.emb.weight.data
+            # else:
+            #     network.emb.emb.weight.data = network_g.emb.emb.weight.data
+
+            if not no_over_gen:
+                train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
+                train_over_loader = DataLoader(
+                    train_dataset,
+                    sampler=WeightedRandomSampler(train_weights, len(train_weights)),
+                    num_workers=num_workers,
+                    pin_memory=False if no_cuda else True,
+                    batch_size=train_batch_size,
+                )
+            else:
+                train_over_loader = None
         else:
             train_over_loader = None
-    else:
-        train_over_loader = None
 
-    logger.info("Training")
+        logger.info("Training")
 
-    train(
-        network,
-        device,
-        start_epoch,
-        epoch,
-        lr,
-        optimizer,
-        scheduler,
-        criteron,
-        swa_warmup,
-        gradient_max_norm,
-        train_loader,
-        train_over_loader,
-        valid_loader,
-        n_classes,
-        n_samples_per_class,
-        warm,
-        gen,
-        ckpt_path,
-        beta,
-        lam,
-        step_size,
-        attack_iter,
-        other_states=other_states,
-        gamma=gamma,
-        random_start=True,
-        model_seed=network_g,
-        step=eval_step,
-        early=early,
-        early_criterion=early_criterion,
-        **model_cnf.get("train", {}),
-    )
+        train(
+            network,
+            device,
+            start_epoch,
+            epoch,
+            lr,
+            optimizer,
+            scheduler,
+            criteron,
+            swa_warmup,
+            gradient_max_norm,
+            train_loader,
+            train_over_loader,
+            valid_loader,
+            n_classes,
+            n_samples_per_class,
+            warm,
+            gen,
+            ckpt_path,
+            beta,
+            lam,
+            step_size,
+            attack_iter,
+            other_states=other_states,
+            gamma=gamma,
+            random_start=True,
+            model_seed=network_g,
+            step=eval_step,
+            early=early,
+            early_criterion=early_criterion,
+            **model_cnf.get("train", {}),
+        )
     ##################################################################################
 
     ################################### Evaluation ###################################
+    if mode == "eval":
+        ckpt_path = net_t
+
     logger.info("Evaluation")
 
     load_checkpoint(ckpt_path, network, set_rng_state=False)
