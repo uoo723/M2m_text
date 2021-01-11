@@ -81,6 +81,12 @@ def set_seed(seed: int):
 @click.option("--decay", type=click.FLOAT, default=2e-4, help="Weight decay")
 @click.option("--lr", type=click.FLOAT, default=0.1, help="learning rate")
 @click.option(
+    "--eta-min",
+    type=click.FLOAT,
+    default=1e-4,
+    help="Minimum learning rate for cosine annealing scheduler",
+)
+@click.option(
     "--step-size", type=click.FLOAT, default=0.1, help="Step size in generation"
 )
 @click.option(
@@ -158,6 +164,7 @@ def main(
     gen,
     decay,
     lr,
+    eta_min,
     step_size,
     beta,
     lam,
@@ -286,7 +293,7 @@ def main(
         criteron = nn.CrossEntropyLoss()
         optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
         scheduler = CosineAnnealingLR(
-            optimizer, T_max=max(3, epoch // 10), eta_min=1e-4
+            optimizer, T_max=max(3, epoch // 10), eta_min=eta_min
         )
 
         if net_t is not None:
