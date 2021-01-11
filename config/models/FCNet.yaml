@@ -7,8 +7,8 @@ model:
 
 train:
   input_opts:
-    return_hidden: true
+    return_emb: true
   gen_input_opts:
-    pass_hidden: true
+    pass_emb: true
   last_input_opts:
-    pass_hidden: true
+    pass_emb: true
