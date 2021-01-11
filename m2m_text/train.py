@@ -380,6 +380,18 @@ def train(
                 else:
                     e += 1
                     if early is not None and e > early:
+                        last_ckpt_path, ext = os.path.splitext(ckpt_path)
+                        last_ckpt_path += "_last" + ext
+
+                        save_checkpoint(
+                            last_ckpt_path,
+                            model,
+                            optimizer,
+                            results,
+                            epoch,
+                            scheduler=scheduler,
+                            other_states=other_states,
+                        )
                         return
 
                 if len(num_gen_list) > 0:
