@@ -252,14 +252,6 @@ def main(
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
-    if "emb_init" in data_cnf:
-        emb_init = get_emb_init(
-            data_cnf["emb_init"], train_dataset.vocab_path, train_dataset.w2v_model_path
-        )
-        model_cnf["model"]["emb_init"] = emb_init
-    else:
-        emb_init = None
-
     network = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
 
     network.to(device)
