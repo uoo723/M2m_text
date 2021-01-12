@@ -86,6 +86,7 @@ def set_seed(seed: int):
     default=1e-4,
     help="Minimum learning rate for cosine annealing scheduler",
 )
+@click.option("--no-scheduler", is_flag=True, default=False, help="Disable scheduler")
 @click.option(
     "--step-size", type=click.FLOAT, default=0.1, help="Step size in generation"
 )
@@ -165,6 +166,7 @@ def main(
     decay,
     lr,
     eta_min,
+    no_scheduler,
     step_size,
     beta,
     lam,
@@ -292,9 +294,12 @@ def main(
     if mode == "train":
         criteron = nn.CrossEntropyLoss()
         optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
-        scheduler = CosineAnnealingLR(
-            optimizer, T_max=max(3, epoch // 10), eta_min=eta_min
-        )
+        if not no_scheduler:
+            scheduler = CosineAnnealingLR(
+                optimizer, T_max=max(3, epoch // 10), eta_min=eta_min
+            )
+        else:
+            scheduler = None
 
         if net_t is not None:
             logger.info("Resume training")
