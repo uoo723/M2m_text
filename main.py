@@ -18,11 +18,16 @@ from ruamel.yaml import YAML
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from m2m_text.datasets import DrugReview, RCV1
+from m2m_text.datasets import RCV1, DrugReview
 from m2m_text.networks import AttentionRNN, FCNet
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
-from m2m_text.utils.data import get_emb_init, get_le, get_oversampled_data
+from m2m_text.utils.data import (
+    get_emb_init,
+    get_le,
+    get_n_samples_per_class,
+    get_oversampled_data,
+)
 from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {"AttentionRNN": AttentionRNN, "FCNet": FCNet}
@@ -219,11 +224,9 @@ def main(
     le = get_le(train_dataset.le_path)
     n_classes = len(le.classes_)
 
-    counter = Counter(np.concatenate([train_dataset.y, valid_dataset.y]))
-    n_samples_per_class = np.zeros(n_classes, dtype=np.long)
-
-    for i, count in counter.items():
-        n_samples_per_class[i] = count
+    n_samples_per_class = get_n_samples_per_class(
+        np.concatenate([train_dataset.y, valid_dataset.y])
+    )
 
     logger.info(f"# of train dataset: {len(train_dataset):,}")
     logger.info(f"# of valid dataset: {len(valid_dataset):,}")
