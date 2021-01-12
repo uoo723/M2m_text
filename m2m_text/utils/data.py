@@ -145,7 +145,7 @@ def get_n_samples_per_class(y: np.ndarray):
             number samples for class i is n_samples_per_calss[i]
     """
     cnt = Counter(y)
-    n_samples_per_class = np.zeros(len(cnt))
+    n_samples_per_class = np.zeros(len(cnt), dtype=np.long)
 
     for i, count in cnt.items():
         n_samples_per_class[i] = count
