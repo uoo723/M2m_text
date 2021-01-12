@@ -4,6 +4,7 @@ Created on 2021/01/07
 """
 import os
 import pickle
+from collections import Counter
 from typing import Iterable, Optional, Union
 
 import joblib
@@ -131,3 +132,22 @@ def get_oversampled_data(
             num_sample_per_class[label] -= 1
 
     return selected_list
+
+
+def get_n_samples_per_class(y: np.ndarray):
+    """Returns num of samples of class
+
+    Args:
+        y (np.ndarray): 1-D numpy array of class.
+
+    Returns:
+        n_samples_per_class (np.ndarray): Number of samples per class 1-D array.
+            number samples for class i is n_samples_per_calss[i]
+    """
+    cnt = Counter(y)
+    n_samples_per_class = np.zeros(len(cnt))
+
+    for i, count in cnt.items():
+        n_samples_per_class[i] = count
+
+    return n_samples_per_class
