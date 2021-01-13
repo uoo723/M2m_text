@@ -2,7 +2,11 @@
 Created on 2021/01/07
 @author Sangwoo Han
 """
+from collections import deque
+from typing import Optional, Union
+
 import torch
+import torch.nn as nn
 from logzero import logger
 
 
@@ -36,7 +40,14 @@ def sum_t(tensor):
     return tensor.float().sum().item()
 
 
-def clip_gradient(model, gradient_clip_value, gradient_norm_queue):
+def clip_gradient(
+    model: Union[nn.Module, nn.DataParallel],
+    gradient_norm_queue: deque,
+    gradient_clip_value: Optional[float] = None,
+):
+    if gradient_clip_value is None:
+        return
+
     max_norm = max(gradient_norm_queue)
     total_norm = torch.nn.utils.clip_grad_norm_(
         model.parameters(), max_norm * gradient_clip_value

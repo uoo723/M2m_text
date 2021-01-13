@@ -35,16 +35,13 @@ def train_step(
     gradient_max_norm,
 ):
     model.train()
-    optimizer.zero_grad()
 
     outputs = model(data_x)
     loss = criterion(outputs, data_y)
 
+    optimizer.zero_grad()
     loss.backward()
-
-    if gradient_max_norm is not None:
-        clip_gradient(model, gradient_max_norm, gradient_norm_queue)
-
+    clip_gradient(model, gradient_norm_queue, gradient_max_norm)
     optimizer.step()
 
     return loss.item()
@@ -159,10 +156,7 @@ def train_gen_step(
 
     optimizer.zero_grad()
     loss.backward()
-
-    if gradient_max_norm is not None:
-        clip_gradient(model, gradient_max_norm, gradient_norm_queue)
-
+    clip_gradient(model, gradient_norm_queue, gradient_max_norm)
     optimizer.step()
 
     return loss.item(), num_gen, max_prob, mean_prob
