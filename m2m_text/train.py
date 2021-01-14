@@ -7,8 +7,10 @@ from collections import deque
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from logzero import logger
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from .loss import classwise_loss
@@ -84,15 +86,19 @@ def train_gen_step(
         gen_index = torch.arange(batch_size).squeeze()
         gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
 
-    with torch.no_grad():
-        orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
-        if type(orig_inputs) == tuple:
-            orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
-        else:
-            other_inputs = None
+    if input_opts:
+        with torch.no_grad():
+            orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
+            if type(orig_inputs) == tuple:
+                orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
+            else:
+                other_inputs = None
+            inputs = orig_inputs.clone()
+    else:
+        orig_inputs = data_x
+        other_inputs = None
 
-        inputs = orig_inputs.clone()
-
+    inputs = orig_inputs.clone()
     targets = data_y.clone()
 
     bs = n_samples_per_class[data_y].repeat(gen_index.size(0), 1)
@@ -192,7 +198,10 @@ def generation(
 
     if random_start:
         random_noise = random_perturb(inputs, "l2", 0.5)
-        inputs = torch.clamp(inputs + random_noise, 0, 1)
+        # print("before:", inputs)
+        # inputs = torch.clamp(inputs + random_noise, 0, 1)
+        inputs = inputs + random_noise
+        # print("after:", inputs)
 
     for _ in range(max_iter):
         inputs = inputs.clone().detach().requires_grad_(True)
@@ -210,7 +219,7 @@ def generation(
         )
         (grad,) = torch.autograd.grad(loss, [inputs])
 
-        inputs = inputs - make_step(grad, "l2", step_size, input_gen_size)
+        inputs = inputs - make_step(grad, "inf", step_size, input_gen_size)
 
     inputs = inputs.detach()
 
@@ -223,12 +232,12 @@ def generation(
 
     one_hot = torch.zeros_like(outputs_g)
     one_hot.scatter_(1, targets.view(-1, 1), 1)
-    probs_g = torch.softmax(outputs_g, dim=1)[one_hot.to(torch.bool)]
+    probs_g = torch.softmax(outputs_g, dim=1)[one_hot.bool()]
 
     max_prob = probs_g.max().item()
     mean_prob = probs_g.mean().item()
 
-    correct = (probs_g >= gamma) * torch.bernoulli(p_accept).long().to(device)
+    correct = (probs_g >= gamma) * torch.bernoulli(p_accept).bool().to(device)
 
     model_r.train()
 
@@ -287,6 +296,11 @@ def train(
     results = {"acc": 0.0, "bal_acc": 0.0}
     num_gen_list = deque(maxlen=50)
 
+    last_ckpt_path, ext = os.path.splitext(ckpt_path)
+    last_ckpt_path += "_last" + ext
+
+    max_prob, mean_prob = 0, 0
+
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
             swa_init(model, swa_state)
@@ -301,6 +315,9 @@ def train(
             train_inputs = tuple(batch.to(device) for batch in train_inputs)
             global_step += 1
             if epoch >= warm and gen:
+                # if epoch == warm and hasattr(model, "init_linear"):
+                #     model.init_linear()
+
                 loss, num_gen, max_prob, mean_prob = train_gen_step(
                     model,
                     model_seed,
@@ -346,12 +363,18 @@ def train(
                 swa_step(model, swa_state)
                 swap_swa_params(model, swa_state)
 
-                labels = [
-                    predict_step(model, batch[0].to(device))[1]
-                    for batch in valid_loader
-                ]
+                labels, targets = zip(
+                    *[
+                        (
+                            predict_step(model, batch[0].to(device))[1],
+                            batch[1].numpy(),
+                        )
+                        for batch in valid_loader
+                    ]
+                )
+
                 labels = np.concatenate(labels)
-                targets = valid_loader.dataset.y
+                targets = np.concatenate(targets)
 
                 results = get_accuracy(labels, targets)
 
@@ -389,7 +412,11 @@ def train(
                         return
 
                 if len(num_gen_list) > 0:
-                    gen_log_msg = f" avg gen: {round(np.mean(num_gen_list), 2)}"
+                    gen_log_msg = (
+                        f" avg gen: {round(np.mean(num_gen_list), 2)} "
+                        f"max prob: {round(max_prob, 4)} "
+                        f"mean prob: {round(mean_prob, 4)}"
+                    )
                 else:
                     gen_log_msg = ""
 
@@ -403,21 +430,18 @@ def train(
         if scheduler is not None:
             scheduler.step()
 
-    last_ckpt_path, ext = os.path.splitext(ckpt_path)
-    last_ckpt_path += "_last" + ext
-
-    save_checkpoint(
-        last_ckpt_path,
-        model,
-        optimizer,
-        results,
-        epoch,
-        scheduler=scheduler,
-        other_states=other_states,
-    )
+        save_checkpoint(
+            last_ckpt_path,
+            model,
+            optimizer,
+            results,
+            epoch,
+            scheduler=scheduler,
+            other_states=other_states,
+        )
 
 
-def predict_step(model, data_x):
+def predict_step(model: nn.Module, data_x: torch.Tensor):
     model.eval()
     with torch.no_grad():
         scores = F.softmax(model(data_x), dim=-1)
@@ -425,15 +449,26 @@ def predict_step(model, data_x):
         return scores.cpu(), labels.cpu()
 
 
-def evaluate(model, dataloader, targets, num_classes, device, le):
-    labels = [
-        predict_step(model, batch[0].to(device))[1]
-        for batch in tqdm(dataloader, desc="Predict")
-    ]
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    num_classes: int,
+    device: torch.device,
+):
+    labels, targets = zip(
+        *[
+            (
+                predict_step(model, batch[0].to(device))[1],
+                batch[1].numpy(),
+            )
+            for batch in tqdm(dataloader, desc="Predict")
+        ]
+    )
 
     labels = np.concatenate(labels)
+    targets = np.concatenate(targets)
 
-    results = get_accuracy(le.classes_[labels], targets)
+    results = get_accuracy(labels, targets)
 
     logger.info(
         f"acc: {round(results['acc'], 4)} bal acc: {round(results['bal_acc'], 4)}"
