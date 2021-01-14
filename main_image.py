@@ -13,11 +13,15 @@ import logzero
 import numpy as np
 import torch
 import torch.nn as nn
+import torchvision.transforms as transforms
 from logzero import logger
 from ruamel.yaml import YAML
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torchvision import transforms
+from torchvision.datasets import CIFAR10
 
+from m2m_image.data_loader import get_imbalanced, make_longtailed_imb, get_oversampled
+from m2m_image.models import resnet32
 from m2m_text.datasets import RCV1, DrugReview
 from m2m_text.networks import AttentionRNN, FCNet
 from m2m_text.optimizers import DenseSparseAdam
@@ -30,8 +34,8 @@ from m2m_text.utils.data import (
 )
 from m2m_text.utils.model import load_checkpoint
 
-MODEL_CLS = {"AttentionRNN": AttentionRNN, "FCNet": FCNet}
-DATASET_CLS = {"DrugReview": DrugReview, "RCV1": RCV1}
+MODEL_CLS = {"AttentionRNN": AttentionRNN, "FCNet": FCNet, "ResNet32": resnet32}
+DATASET_CLS = {"DrugReview": DrugReview, "RCV1": RCV1, "cifar10": CIFAR10}
 
 
 def set_logger(log_path: str):
@@ -66,6 +70,9 @@ def set_seed(seed: int):
     type=click.Path(),
     default="./checkpoint",
     help="Checkpoint root path",
+)
+@click.option(
+    "--n-samples", type=click.INT, default=5000, help="Restrict total number of samples"
 )
 @click.option("--ckpt-name", type=click.STRING, help="Checkpoint name")
 @click.option("--net-t", type=click.STRING, help="Checkpoint path of training network")
@@ -159,6 +166,7 @@ def main(
     seed,
     model_cnf,
     data_cnf,
+    n_samples,
     ckpt_root_path,
     ckpt_name,
     net_t,
@@ -215,68 +223,52 @@ def main(
     ################################## Prepare Dataset ###############################
     logger.info(f"Dataset: {dataset_name}")
 
-    train_dataset, valid_dataset = DATASET_CLS[dataset_name].splits(
-        test_size=data_cnf.get("valid_size", 200), **data_cnf["dataset"]
+    n_classes = model_cnf["model"]["num_classes"]
+    n_samples_per_class_base = [int(n_samples)] * n_classes
+    n_samples_per_class_base = make_longtailed_imb(n_samples, n_classes, 100)
+    n_samples_per_class_base = tuple(n_samples_per_class_base)
+
+    n_samples_per_class = n_samples_per_class_base
+
+    transform_train = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+        ]
     )
 
-    test_dataset = DATASET_CLS[dataset_name](train=False, **data_cnf["dataset"])
-
-    le = get_le(train_dataset.le_path)
-    n_classes = len(le.classes_)
-
-    n_samples_per_class = get_n_samples_per_class(
-        np.concatenate([train_dataset.y, valid_dataset.y])
+    transform_test = transforms.Compose(
+        [
+            transforms.ToTensor(),
+        ]
     )
 
-    logger.info(f"# of train dataset: {len(train_dataset):,}")
-    logger.info(f"# of valid dataset: {len(valid_dataset):,}")
-    logger.info(f"# of test dataset: {len(test_dataset):,}")
+    train_loader, valid_loader, test_loader = get_imbalanced(
+        dataset_name,
+        n_samples_per_class_base,
+        train_batch_size,
+        transform_train,
+        transform_test,
+    )
+
+    _, targets = zip(*valid_loader.dataset)
+    targets = np.array(targets)
+
+    valid_loader.dataset.y = targets
+
     logger.info(f"# of classes: {n_classes:,}")
-
-    if not no_over:
-        train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
-        train_loader = DataLoader(
-            train_dataset,
-            num_workers=num_workers,
-            sampler=WeightedRandomSampler(train_weights, len(train_weights)),
-            pin_memory=False if no_cuda else True,
-            batch_size=train_batch_size,
-        )
-    else:
-        train_loader = DataLoader(
-            train_dataset,
-            num_workers=num_workers,
-            shuffle=True,
-            pin_memory=False if no_cuda else True,
-            batch_size=train_batch_size,
-        )
-
-    valid_loader = DataLoader(
-        valid_dataset,
-        num_workers=num_workers,
-        shuffle=False,
-        pin_memory=False if no_cuda else True,
-        batch_size=test_batch_size,
-    )
-
-    test_loader = DataLoader(
-        test_dataset,
-        num_workers=num_workers,
-        shuffle=False,
-        pin_memory=False if no_cuda else True,
-        batch_size=test_batch_size,
-    )
     ##################################################################################
 
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
-    network = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+    network = MODEL_CLS[model_name](**model_cnf["model"])
 
     network.to(device)
 
     if net_g:
-        network_g = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+        network_g = MODEL_CLS[model_name](**model_cnf["model"])
         load_checkpoint(net_g, network_g, set_rng_state=False)
         network_g.to(device)
     else:
@@ -321,13 +313,12 @@ def main(
             #     network.emb.emb.weight.data = network_g.emb.emb.weight.data
 
             if not no_over_gen:
-                train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
-                train_over_loader = DataLoader(
-                    train_dataset,
-                    sampler=WeightedRandomSampler(train_weights, len(train_weights)),
-                    num_workers=num_workers,
-                    pin_memory=False if no_cuda else True,
-                    batch_size=train_batch_size,
+                train_over_loader, _, _ = get_oversampled(
+                    dataset_name,
+                    n_samples_per_class,
+                    train_batch_size,
+                    transform_train,
+                    transform_test,
                 )
             else:
                 train_over_loader = None

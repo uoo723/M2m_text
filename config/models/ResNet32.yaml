@@ -1,0 +1,4 @@
+name: ResNet32
+
+model:
+  num_classes: 10
