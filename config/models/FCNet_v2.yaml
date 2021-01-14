@@ -1,0 +1,14 @@
+name: FCNet
+
+model:
+  encoder_linear_size: [512]
+  linear_size: [256]
+  input_size: 21531  # RCV1
+
+train:
+  input_opts:
+    return_emb: true
+  gen_input_opts:
+    pass_emb: true
+  last_input_opts:
+    pass_emb: true

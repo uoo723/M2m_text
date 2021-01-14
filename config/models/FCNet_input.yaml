@@ -1,0 +1,6 @@
+name: FCNet
+
+model:
+  encoder_linear_size: [512, 256]
+  linear_size: [512]
+  input_size: 21531  # RCV1
