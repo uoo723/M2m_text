@@ -259,3 +259,8 @@ class InputNormalize(nn.Module):
         x = torch.clamp(x, 0, 1)
         x_normalized = (x - self.new_mean) / self.new_std
         return x_normalized
+
+
+class Identity(nn.Module):
+    def forward(self, x):
+        return x

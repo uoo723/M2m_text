@@ -29,12 +29,13 @@ from .utils.train import (
     swap_swa_params,
 )
 
-from m2m_image.models import InputNormalize
+from m2m_image.models import InputNormalize, Identity
 
 mean = torch.tensor([0.4914, 0.4822, 0.4465])
 std = torch.tensor([0.2023, 0.1994, 0.2010])
 
 normalizer = InputNormalize(mean, std)
+# normalizer = Identity()
 
 
 def train_step(
