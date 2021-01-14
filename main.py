@@ -23,7 +23,6 @@ from m2m_text.networks import AttentionRNN, FCNet
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
 from m2m_text.utils.data import (
-    get_emb_init,
     get_le,
     get_n_samples_per_class,
     get_oversampled_data,
@@ -378,7 +377,7 @@ def main(
 
     load_checkpoint(ckpt_path, network, set_rng_state=False)
 
-    evaluate(network, test_loader, test_dataset.raw_y, n_classes, device, le)
+    evaluate(network, test_loader, n_classes, device)
     ##################################################################################
 
 
