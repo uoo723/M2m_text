@@ -233,3 +233,17 @@ class DrugReview(TextDataset):
     @y.setter
     def y(self, y):
         self.labels = y
+
+
+class DrugReviewSmall(DrugReview):
+    base_folder = "drugReviewSmall"
+
+    url = "https://drive.google.com/uc?id=1jc29iVmdyEDMRxngMoUTQ_PED_ySxeSz"
+
+    filename = "drugReviewSmall.tar.gz"
+    tgz_md5 = "4240ada4c2e303f6bb61a60ed147945e"
+
+    file_list = [
+        ("train.csv", "60afd9e5bfbdf8f982d9419a2f9875e7"),
+        ("test.csv", "2d588eeff7e919a634fbb7bfc68a1c2c"),
+    ]
