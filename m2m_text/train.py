@@ -279,11 +279,12 @@ def train(
     gen_input_opts={},  # Te be passed to gneration()
     last_input_opts={},  # To be passed to train_gen_step() at the last phase of generation
 ):
-    global_step, best, e = 0, 0.0, 0
+    global_step, best = 0, 0.0
 
     n_samples_per_class_tensor = torch.tensor(n_samples_per_class).to(device)
 
     swa_state = other_states.get("swa_state", {})
+    e = other_states.get("early", 0)
 
     if gradient_max_norm is not None:
         gradient_norm_queue = other_states.get(
@@ -381,6 +382,7 @@ def train(
                 other_states = {
                     "swa_state": swa_state,
                     "gradient_norm_queue": gradient_norm_queue,
+                    "early": e,
                 }
 
                 if results[early_criterion] > best:
