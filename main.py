@@ -119,7 +119,9 @@ def set_seed(seed: int):
     "--warm", type=click.INT, default=160, help="Deferred stragtegy for re-balancing"
 )
 @click.option("--epoch", type=click.INT, default=200, help="Total number of epochs")
-@click.option("--swa-warmup", type=click.INT, default=10, help="Warmup for SWA")
+@click.option(
+    "--swa-warmup", type=click.INT, default=10, help="Warmup for SWA. Disable: -1"
+)
 @click.option(
     "--gradient-max-norm",
     type=click.FLOAT,
