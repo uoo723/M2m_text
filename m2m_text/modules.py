@@ -113,13 +113,17 @@ class MLLinear(nn.Module):
             nn.Linear(in_s, out_s)
             for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
         )
-        for linear in self.linear:
-            nn.init.xavier_uniform_(linear.weight)
         self.output = nn.Linear(linear_size[-1], output_size)
-        nn.init.xavier_uniform_(self.output.weight)
+        self.init_weights()
 
     def forward(self, inputs):
         linear_out = inputs
         for linear in self.linear:
             linear_out = F.relu(linear(linear_out))
         return torch.squeeze(self.output(linear_out), -1)
+
+    def init_weights(self):
+        """Initialize weights"""
+        for linear in self.linear:
+            nn.init.xavier_uniform_(linear.weight)
+        nn.init.xavier_uniform_(self.output.weight)

@@ -172,3 +172,7 @@ class FCNet(nn.Module):
 
         outputs = self.encoder(inputs)
         return self.linear(self.dropout(F.relu(outputs)))
+
+    def init_linear(self):
+        """Initialized linear"""
+        self.linear.init_weights()
