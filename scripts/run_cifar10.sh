@@ -9,16 +9,17 @@ args=(
     --test-batch-size 600
     --ckpt-name M2m
     --no-over
-    --seed 1
+    --seed 0
     --gen
+    --swa-warmup -1
     --warm 160
     --step-size 0.1
     --attack-iter 10
     --gamma 0.99
 	--eval-step 100
     --early 1000
-    --net-t ./checkpoint/M2m_ResNet32_cifar10_1_last.pt
-    --net-g ./checkpoint/baseline_ResNet32_cifar10_1.pt
+    # --net-t ./checkpoint/M2m_ResNet32_cifar10_0_last.pt
+    --net-g ./checkpoint/baseline_ResNet32_cifar10_0.pt
 )
 
 python main_image.py "${args[@]}"

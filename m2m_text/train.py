@@ -4,7 +4,6 @@ Created on 2021/01/07
 """
 import os
 from collections import deque
-from typing import Optional
 
 import numpy as np
 import torch
@@ -230,7 +229,7 @@ def generation(
         )
         (grad,) = torch.autograd.grad(loss, [inputs])
 
-        inputs = inputs - make_step(grad, "inf", step_size, input_gen_size)
+        inputs = inputs - make_step(grad, "l2", step_size, input_gen_size)
         inputs = torch.clamp(inputs, 0, 1)
 
     inputs = inputs.detach()
@@ -240,7 +239,7 @@ def generation(
     else:
         model_inputs = inputs
 
-    outputs_g = model_g(model_inputs, **last_input_opts)
+    outputs_g = model_g(normalizer(model_inputs), **last_input_opts)
 
     one_hot = torch.zeros_like(outputs_g)
     one_hot.scatter_(1, targets.view(-1, 1), 1)

@@ -10,9 +10,10 @@ args=(
     --test-batch-size 600
     --ckpt-name baseline
     --no-over
-    --seed 1
+    --seed 0
 	# --early-criterion 'acc'
-	--eval-step 100
+	--eval-step 50
+    --early 100
 )
 
 python main_image.py "${args[@]}"
