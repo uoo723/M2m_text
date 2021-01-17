@@ -9,6 +9,7 @@ args=(
     --test-batch-size 1000
     --ckpt-name baseline
     --no-over
+    --early-criterion 'acc'
     --seed 0
 )
 

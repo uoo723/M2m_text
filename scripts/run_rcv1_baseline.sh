@@ -5,12 +5,14 @@ args=(
     --data-cnf config/datasets/RCV1.yaml
     --epoch 20
     --lr 0.001
-    --train-batch-size 1000
-    --test-batch-size 2000
+    --train-batch-size 200
+    --test-batch-size 500
     --ckpt-name baseline
     --no-over
     --seed 0
-	--eval-step 10
+    --swa-warmup -1
+    --early-criterion 'acc'
+	--eval-step 50
 )
 
 python main.py "${args[@]}"

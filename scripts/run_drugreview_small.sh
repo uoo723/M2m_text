@@ -14,6 +14,7 @@ args=(
     --gen
     --seed 0
     --early 100
+    --early-criterion 'acc'
     --eval-step 50
     --net-g ./checkpoint/baseline_AttentionRNN_DrugReviewSmall_0.pt
 )

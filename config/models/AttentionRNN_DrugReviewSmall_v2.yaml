@@ -1,0 +1,19 @@
+name: AttentionRNN
+
+model:
+  hidden_size: 256
+  layers_num: 1
+  linear_size: [256, 128]
+  dropout: 0.5
+  emb_trainable: false
+  emb_size: 300
+  emb_init: data/drugReviewSmall/emb_init.npy  # drugReview
+
+train:
+  input_opts:
+    return_emb: true
+  gen_input_opts:
+    pass_emb: true
+    rnn_training: true
+  last_input_opts:
+    pass_emb: true
