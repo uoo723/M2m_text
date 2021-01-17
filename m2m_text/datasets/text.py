@@ -241,9 +241,9 @@ class DrugReviewSmall(DrugReview):
     url = "https://drive.google.com/uc?id=1jc29iVmdyEDMRxngMoUTQ_PED_ySxeSz"
 
     filename = "drugReviewSmall.tar.gz"
-    tgz_md5 = "4240ada4c2e303f6bb61a60ed147945e"
+    tgz_md5 = "0b74728596c617ea8993ceda71eaf6d0"
 
     file_list = [
-        ("train.csv", "60afd9e5bfbdf8f982d9419a2f9875e7"),
-        ("test.csv", "2d588eeff7e919a634fbb7bfc68a1c2c"),
+        ("train.csv", "52ac786fd1bdc1891f61439aa6596260"),
+        ("test.csv", "1bd45029abb30e7de9f60bbd0a25d529"),
     ]
