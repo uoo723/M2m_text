@@ -129,7 +129,6 @@ def set_seed(seed: int):
 @click.option(
     "--gradient-max-norm",
     type=click.FLOAT,
-    default=5.0,
     help="max norm for gradient clipping",
 )
 @click.option("--no-over", is_flag=True, default=False, help="Disable over-sampling")
