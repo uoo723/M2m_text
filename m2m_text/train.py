@@ -306,6 +306,19 @@ def train(
         if epoch == swa_warmup:
             swa_init(model, swa_state)
 
+        if epoch == warm and gen:
+            m2m_ckpt_path, ext = os.path.splitext(ckpt_path)
+            m2m_ckpt_path += "_before_M2m" + ext
+            save_checkpoint(
+                m2m_ckpt_path,
+                model,
+                optimizer,
+                results,
+                epoch,
+                scheduler=scheduler,
+                other_states=other_states,
+            )
+
         if epoch >= warm and gen and train_over_loader is not None:
             dataloader = train_over_loader
         else:
