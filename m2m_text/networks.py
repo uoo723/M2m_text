@@ -43,17 +43,17 @@ class Network(nn.Module):
 class AttentionRNN(Network):
     def __init__(
         self,
-        labels_num: int,
+        num_labels: int,
         emb_size: int,
         hidden_size: int,
-        layers_num: int,
+        num_layers: int,
         linear_size: List[int],
         dropout: float,
         **kwargs
     ):
         super(AttentionRNN, self).__init__(emb_size, **kwargs)
-        self.lstm = LSTMEncoder(emb_size, hidden_size, layers_num, dropout)
-        self.attention = MLAttention(labels_num, hidden_size * 2)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.attention = MLAttention(num_labels, hidden_size * 2)
         self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
 
     def forward(
@@ -115,14 +115,14 @@ class FCNet(nn.Module):
 
     def __init__(
         self,
-        labels_num: int,
+        num_labels: int,
         encoder_linear_size: List[int],
         linear_size: List[int],
         input_size: Optional[int] = None,
         dropout: float = 0.2,
     ):
         super().__init__()
-        self.labels_num = labels_num
+        self.num_labels = num_labels
         self.encoder_linear_size = encoder_linear_size
         self.linear_size = linear_size
         self.input_size = input_size
@@ -136,13 +136,13 @@ class FCNet(nn.Module):
         input_size = self.input_size
         encoder_linear_size = self.encoder_linear_size
         linear_size = self.linear_size
-        labels_num = self.labels_num
+        num_labels = self.num_labels
         dropout = self.dropout_p
 
         self.encoder = MLLinear(
             [input_size] + encoder_linear_size[:-1], encoder_linear_size[-1]
         )
-        self.linear = MLLinear(encoder_linear_size[-1:] + linear_size, labels_num)
+        self.linear = MLLinear(encoder_linear_size[-1:] + linear_size, num_labels)
         self.dropout = nn.Dropout(dropout)
 
         self._built = True

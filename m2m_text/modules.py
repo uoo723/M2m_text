@@ -55,13 +55,13 @@ class Embedding(nn.Module):
 
 class LSTMEncoder(nn.Module):
     def __init__(
-        self, input_size: int, hidden_size: int, layers_num: int, dropout: float
+        self, input_size: int, hidden_size: int, num_layers: int, dropout: float
     ):
         super(LSTMEncoder, self).__init__()
         self.lstm = nn.LSTM(
-            input_size, hidden_size, layers_num, batch_first=True, bidirectional=True
+            input_size, hidden_size, num_layers, batch_first=True, bidirectional=True
         )
-        self.init_state = nn.Parameter(torch.zeros(2 * 2 * layers_num, 1, hidden_size))
+        self.init_state = nn.Parameter(torch.zeros(2 * 2 * num_layers, 1, hidden_size))
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, inputs, lengths, training=False, **kwargs):
@@ -92,9 +92,9 @@ class LSTMEncoder(nn.Module):
 
 
 class MLAttention(nn.Module):
-    def __init__(self, labels_num: int, hidden_size: int):
+    def __init__(self, num_labels: int, hidden_size: int):
         super(MLAttention, self).__init__()
-        self.attention = nn.Linear(hidden_size, labels_num, bias=False)
+        self.attention = nn.Linear(hidden_size, num_labels, bias=False)
         nn.init.xavier_uniform_(self.attention.weight)
 
     def forward(self, inputs, masks):

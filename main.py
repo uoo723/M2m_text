@@ -53,14 +53,14 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
 
 
-def load_model(model_name: str, n_classes: int, model_cnf: dict):
+def load_model(model_name: str, num_labels: int, model_cnf: dict):
     if model_name in TRANSFORMER_MODELS:
         pretrained_model_name = model_cnf["model"].pop("pretrained")
         network = MODEL_CLS[model_name].from_pretrained(
-            pretrained_model_name, num_labels=n_classes, **model_cnf["model"]
+            pretrained_model_name, num_labels=num_labels, **model_cnf["model"]
         )
     else:
-        network = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+        network = MODEL_CLS[model_name](num_labels=num_labels, **model_cnf["model"])
 
     return network
 
@@ -270,7 +270,7 @@ def main(
     test_dataset = DATASET_CLS[dataset_name](train=False, **data_cnf["dataset"])
 
     le = get_le(train_dataset.le_path)
-    n_classes = len(le.classes_)
+    num_labels = len(le.classes_)
 
     n_samples_per_class = get_n_samples_per_class(
         np.concatenate([train_dataset.y, valid_dataset.y])
@@ -279,7 +279,7 @@ def main(
     logger.info(f"# of train dataset: {len(train_dataset):,}")
     logger.info(f"# of valid dataset: {len(valid_dataset):,}")
     logger.info(f"# of test dataset: {len(test_dataset):,}")
-    logger.info(f"# of classes: {n_classes:,}")
+    logger.info(f"# of classes: {num_labels:,}")
 
     if not no_over:
         train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
@@ -319,12 +319,12 @@ def main(
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
-    network = load_model(model_name, n_classes, model_cnf)
+    network = load_model(model_name, num_labels, model_cnf)
 
     network.to(device)
 
     if net_g:
-        network_g = load_model(model_name, n_classes, model_cnf)
+        network_g = load_model(model_name, num_labels, model_cnf)
         load_checkpoint(net_g, network_g, set_rng_state=False)
         network_g.to(device)
     else:
@@ -398,7 +398,7 @@ def main(
             train_loader,
             train_over_loader,
             valid_loader,
-            n_classes,
+            num_labels,
             n_samples_per_class,
             warm,
             gen,
@@ -427,7 +427,7 @@ def main(
 
     load_checkpoint(ckpt_path, network, set_rng_state=False)
 
-    evaluate(network, test_loader, n_classes, device, is_transformer)
+    evaluate(network, test_loader, num_labels, device, is_transformer)
     ##################################################################################
 
 
