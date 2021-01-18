@@ -57,7 +57,7 @@ def load_checkpoint(
     if optim:
         optim.load_state_dict(ckpt["optimizer"])
 
-    if scheduler:
+    if scheduler and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
 
     if set_rng_state:
