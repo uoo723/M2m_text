@@ -4,6 +4,7 @@ Created on 2021/01/07
 """
 import os
 from collections import deque
+from typing import Tuple, Union
 
 import numpy as np
 import torch
@@ -29,6 +30,7 @@ from .utils.train import (
 
 def train_step(
     model,
+    is_transformer,
     criterion,
     optimizer,
     data_x,
@@ -38,7 +40,15 @@ def train_step(
 ):
     model.train()
 
-    outputs = model(data_x)
+    if is_transformer:
+        inputs = {
+            "input_ids": data_x[0],
+            "attention_mask": data_x[1],
+        }
+        outputs = model(**inputs, return_dict=False)[0]
+    else:
+        outputs = model(data_x)
+
     loss = criterion(outputs, data_y)
 
     optimizer.zero_grad()
@@ -52,6 +62,7 @@ def train_step(
 def train_gen_step(
     model,
     model_seed,
+    is_transformer,
     criterion,
     optimizer,
     data_x,
@@ -86,7 +97,14 @@ def train_gen_step(
         gen_index = torch.arange(batch_size).squeeze()
         gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
 
-    if input_opts:
+    if is_transformer:
+        inputs = {
+            "input_ids": data_x[0],
+            "attention_mask": data_x[1],
+        }
+        orig_inputs = model_seed(**data_x, return_emb=True, return_dict=False)[0]
+        other_inputs = None
+    elif input_opts:
         with torch.no_grad():
             orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
             if type(orig_inputs) == tuple:
@@ -127,6 +145,7 @@ def train_gen_step(
     gen_inputs, correct_mask, max_prob, mean_prob = generation(
         model,
         model_seed,
+        is_transformer,
         criterion,
         device,
         seed_inputs,
@@ -157,7 +176,10 @@ def train_gen_step(
     else:
         model_inputs = inputs
 
-    outputs = model(model_inputs, **last_input_opts)
+    if is_transformer:
+        outputs = model(outputs=(model_inputs,), pass_emb=True, return_dict=False)[0]
+    else:
+        outputs = model(model_inputs, **last_input_opts)
     loss = criterion(outputs, targets)
 
     optimizer.zero_grad()
@@ -171,6 +193,7 @@ def train_gen_step(
 def generation(
     model_r,
     model_g,
+    is_transformer,
     criterion,
     device,
     inputs,
@@ -211,8 +234,20 @@ def generation(
         else:
             model_inputs = inputs
 
-        outputs_g = model_g(model_inputs, **gen_input_opts)
-        outputs_r = model_r(model_inputs, **gen_input_opts)
+        if is_transformer:
+            outputs_g = model_g(
+                outputs=(model_inputs,),
+                pass_emb=True,
+                return_dict=False,
+            )[0]
+            outputs_r = model_r(
+                outputs=(model_inputs,),
+                pass_emb=True,
+                return_dict=False,
+            )[0]
+        else:
+            outputs_g = model_g(model_inputs, **gen_input_opts)
+            outputs_r = model_r(model_inputs, **gen_input_opts)
 
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
             outputs_r, seed_targets
@@ -228,7 +263,14 @@ def generation(
     else:
         model_inputs = inputs
 
-    outputs_g = model_g(model_inputs, **last_input_opts)
+    if is_transformer:
+        outputs_g = model_g(
+            outputs=(model_inputs,),
+            pass_emb=True,
+            return_dcit=False,
+        )[0]
+    else:
+        outputs_g = model_g(model_inputs, **last_input_opts)
 
     one_hot = torch.zeros_like(outputs_g)
     one_hot.scatter_(1, targets.view(-1, 1), 1)
@@ -278,6 +320,7 @@ def train(
     input_opts={},  # To be passed to train_gen_step()
     gen_input_opts={},  # Te be passed to gneration()
     last_input_opts={},  # To be passed to train_gen_step() at the last phase of generation
+    is_transformer=False,
 ):
     global_step, best = 0, 0.0
 
@@ -285,6 +328,7 @@ def train(
 
     swa_state = other_states.get("swa_state", {})
     e = other_states.get("early", 0)
+    best = other_states.get("best", 0)
 
     if gradient_max_norm is not None:
         gradient_norm_queue = other_states.get(
@@ -325,8 +369,11 @@ def train(
             dataloader = train_loader
 
         # adjust_learning_rate(optimizer, lr_init, epoch)
-        for i, train_inputs in enumerate(dataloader, 1):
-            train_inputs = tuple(batch.to(device) for batch in train_inputs)
+        for i, (batch_x, batch_y) in enumerate(dataloader, 1):
+            if type(batch_x) == tuple:
+                batch_x = tuple(batch.to(device) for batch in batch_x)
+            batch_y = batch_y.to(device)
+
             global_step += 1
             if epoch >= warm and gen:
                 # if epoch == warm and hasattr(model, "init_linear"):
@@ -335,9 +382,11 @@ def train(
                 loss, num_gen, max_prob, mean_prob = train_gen_step(
                     model,
                     model_seed,
+                    is_transformer,
                     criterion,
                     optimizer,
-                    *train_inputs,
+                    batch_x,
+                    batch_y,
                     num_classes,
                     n_samples_per_class_tensor,
                     imb_type,
@@ -366,9 +415,11 @@ def train(
             else:
                 loss = train_step(
                     model,
+                    is_transformer,
                     criterion,
                     optimizer,
-                    *train_inputs,
+                    batch_x,
+                    batch_y,
                     gradient_norm_queue,
                     gradient_max_norm,
                 )
@@ -380,7 +431,7 @@ def train(
                 labels, targets = zip(
                     *[
                         (
-                            predict_step(model, batch[0].to(device))[1],
+                            predict_step(model, batch[0], device, is_transformer)[1],
                             batch[1].numpy(),
                         )
                         for batch in valid_loader
@@ -396,6 +447,7 @@ def train(
                     "swa_state": swa_state,
                     "gradient_norm_queue": gradient_norm_queue,
                     "early": e,
+                    "best": best,
                 }
 
                 if results[early_criterion] > best:
@@ -456,10 +508,24 @@ def train(
         )
 
 
-def predict_step(model: nn.Module, data_x: torch.Tensor):
+def predict_step(
+    model: nn.Module,
+    data_x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+    device: torch.device,
+    is_transformer: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
     model.eval()
     with torch.no_grad():
-        scores = F.softmax(model(data_x), dim=-1)
+        if is_transformer:
+            inputs = {
+                "input_ids": data_x[0].to(device),
+                "attention_mask": data_x[1].to(device),
+            }
+            logits = model(**inputs, return_dict=False)[0]
+        else:
+            logits = model(data_x.to(device))
+
+        scores = F.softmax(logits, dim=-1)
         labels = torch.argmax(scores, dim=-1)
         return scores.cpu(), labels.cpu()
 
@@ -469,11 +535,12 @@ def evaluate(
     dataloader: DataLoader,
     num_classes: int,
     device: torch.device,
+    is_transformer: bool = False,
 ):
     labels, targets = zip(
         *[
             (
-                predict_step(model, batch[0].to(device))[1],
+                predict_step(model, batch[0], device, is_transformer)[1],
                 batch[1].numpy(),
             )
             for batch in tqdm(dataloader, desc="Predict")

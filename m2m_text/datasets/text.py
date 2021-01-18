@@ -5,17 +5,18 @@ Created on 2021/01/08
 Dataset for text format
 """
 import os
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 from tqdm.auto import tqdm
+from transformers import AutoTokenizer
 
 from ..preprocessing import truncate_text
 from ..utils import download_from_url, extract_archive
 from ..utils.data import get_emb_init, get_le, get_tokenized_texts, get_vocab
-from ._base import Dataset, TDataX, TDataY
+from ._base import Dataset, TDataX, TDataXTensor, TDataY, TDataYTensor
 
 
 class TextDataset(Dataset):
@@ -38,6 +39,7 @@ class TextDataset(Dataset):
         maxlen (int): Max length of texts.
         pad (str): Pad token.
         unknwon (str): Unknwon token.
+        tokenizer_model_name (str, optional): bert tokenizer model name.
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class TextDataset(Dataset):
         maxlen: int = 500,
         pad: str = "<PAD>",
         unknown: str = "<UNK>",
+        tokenizer_model_name: Optional[str] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -63,6 +66,7 @@ class TextDataset(Dataset):
         self.pad = pad
         self.unknown = unknown
         self.maxlen = maxlen
+        self.tokenizer_model_name = tokenizer_model_name
 
     def download_w2v_model(self, quiet: bool = False) -> None:
         """Download w2v model
@@ -91,19 +95,72 @@ class TextDataset(Dataset):
             self.data_dir, self.train_npz if self.train else self.test_npz
         )
 
+        train_npz_path, ext = os.path.splitext(train_npz_path)
+        npz_path, _ = os.path.splitext(npz_path)
+
+        if self.tokenizer_model_name:
+            train_npz_path += "_" + self.tokenizer_model_name.replace("-", "_")
+            npz_path += "_" + self.tokenizer_model_name.replace("-", "_")
+
+        train_npz_path += f"_{self.maxlen}L" + ext
+        npz_path += f"_{self.maxlen}L" + ext
+
         if not os.path.isfile(train_npz_path):
-            self._load_data(train_npz_path)
+            if self.tokenizer_model_name:
+                self._load_data_bert(train_npz_path)
+            else:
+                self._load_data(train_npz_path)
 
-        return self._load_data(npz_path)
-
-    def _load_data(self, npz_path: str) -> Tuple[np.ndarray, np.ndarray]:
-        """Load data, preprocessing if needed."""
-        npz_path = os.path.join(
-            self.data_dir, self.train_npz if self.train else self.test_npz
+        return (
+            self._load_data_bert(npz_path)
+            if self.tokenizer_model_name
+            else self._load_data(npz_path)
         )
-        npz_path = os.path.splitext(npz_path)
-        npz_path = npz_path[0] + f"_{self.maxlen}L" + npz_path[1]  # e.g. train_500L.npz
 
+    def _load_data_bert(self, npz_path: str) -> Tuple[TDataX, TDataY]:
+        if os.path.isfile(npz_path):
+            with np.load(npz_path, allow_pickle=True) as npz:
+                input_ids, attention_mask, labels = (
+                    npz["input_ids"],
+                    npz["attention_mask"],
+                    npz["labels"],
+                )
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_model_name)
+            texts, labels = self.raw_data()
+
+            input_ids = []
+            attention_mask = []
+            for text in tqdm(texts, desc="Tokenized..."):
+                inputs = tokenizer(
+                    text,
+                    truncation=True,
+                    padding="max_length",
+                    return_tensors="np",
+                    max_length=self.maxlen,
+                )
+                input_ids.append(inputs["input_ids"])
+                attention_mask.append(inputs["attention_mask"])
+
+            input_ids = np.concatenate(input_ids)
+            attention_mask = np.concatenate(attention_mask)
+
+            np.savez(
+                npz_path,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+
+        self._labels = labels
+
+        le = get_le(self.le_path, labels)
+        labels = le.transform(labels)
+
+        return (input_ids, attention_mask), labels
+
+    def _load_data(self, npz_path: str) -> Tuple[TDataX, TDataY]:
+        """Load data, preprocessing if needed."""
         if os.path.isfile(npz_path):
             with np.load(npz_path, allow_pickle=True) as npz:
                 texts, labels = npz["texts"], npz["labels"]
@@ -194,17 +251,22 @@ class DrugReview(TextDataset):
     ) -> None:
         super().__init__(root=root, train=train, *args, **kwargs)
         self.download()
-        self.download_w2v_model()
+
+        if not self.tokenizer_model_name:
+            self.download_w2v_model()
 
         self.texts, self.labels = self.load_data()
 
     def __len__(self):
-        return len(self.texts)
+        return len(self.labels)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return torch.from_numpy(self.texts[index]), torch.from_numpy(
-            self.labels[index, None].squeeze()
-        )
+    def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
+        if type(self.texts) == tuple:
+            texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        else:
+            texts = torch.from_numpy(self.texts[index])
+
+        return texts, torch.from_numpy(self.labels[index, None].squeeze())
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         csv_path = os.path.join(

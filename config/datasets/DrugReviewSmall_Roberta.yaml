@@ -1,0 +1,8 @@
+name: DrugReviewSmall
+
+valid_size: 0.1
+
+dataset:
+  maxlen: 200
+  label_encoder_filename: label_encoder
+  tokenizer_model_name: roberta-base

@@ -3,7 +3,7 @@ Created on 2021/01/08
 @author Sangwoo Han
 """
 import os
-from typing import Union
+from typing import Tuple, Union
 
 import numpy as np
 import torch
@@ -12,8 +12,11 @@ from sklearn.model_selection import train_test_split
 
 from ..utils import check_integrity, download_from_url, extract_archive
 
-TDataX = Union[np.ndarray, csr_matrix]
+TDataX = Union[np.ndarray, csr_matrix, Tuple[np.ndarray, np.ndarray]]
 TDataY = Union[np.ndarray, csr_matrix]
+
+TDataXTensor = Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+TDataYTensor = torch.Tensor
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -77,16 +80,42 @@ class Dataset(torch.utils.data.Dataset):
         """
         train_dataset = cls(*args, **kwargs)
         valid_dataset = cls(*args, **kwargs)
-        train_x, valid_x, train_y, valid_y, train_raw_y, valid_raw_y = train_test_split(
-            train_dataset.x, train_dataset.y, train_dataset.raw_y, test_size=test_size
-        )
 
-        train_dataset.x = train_x
-        train_dataset.y = train_y
-        valid_dataset.x = valid_x
-        valid_dataset.y = valid_y
-        train_dataset.raw_y = train_raw_y
-        valid_dataset.raw_y = valid_raw_y
+        if type(train_dataset.x) == tuple:
+            input_len = len(train_dataset.x)
+            data = train_test_split(
+                *train_dataset.x,
+                train_dataset.y,
+                train_dataset.raw_y,
+                test_size=test_size
+            )
+            train_dataset.x = tuple(data[i * 2] for i in range(input_len))
+            valid_dataset.x = tuple(data[i * 2 + 1] for i in range(input_len))
+            train_dataset.y = data[-4]
+            valid_dataset.y = data[-3]
+            train_dataset.raw_y = data[-2]
+            valid_dataset.raw_y = data[-1]
+        else:
+            (
+                train_x,
+                valid_x,
+                train_y,
+                valid_y,
+                train_raw_y,
+                valid_raw_y,
+            ) = train_test_split(
+                train_dataset.x,
+                train_dataset.y,
+                train_dataset.raw_y,
+                test_size=test_size,
+            )
+
+            train_dataset.x = train_x
+            train_dataset.y = train_y
+            valid_dataset.x = valid_x
+            valid_dataset.y = valid_y
+            train_dataset.raw_y = train_raw_y
+            valid_dataset.raw_y = valid_raw_y
 
         return train_dataset, valid_dataset
 

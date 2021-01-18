@@ -19,17 +19,20 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from m2m_text.datasets import RCV1, DrugReview, DrugReviewSmall
-from m2m_text.networks import AttentionRNN, FCNet
+from m2m_text.networks import AttentionRNN, FCNet, RobertaForSeqClassification
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
-from m2m_text.utils.data import (
-    get_le,
-    get_n_samples_per_class,
-    get_oversampled_data,
-)
+from m2m_text.utils.data import get_le, get_n_samples_per_class, get_oversampled_data
 from m2m_text.utils.model import load_checkpoint
 
-MODEL_CLS = {"AttentionRNN": AttentionRNN, "FCNet": FCNet}
+MODEL_CLS = {
+    "AttentionRNN": AttentionRNN,
+    "FCNet": FCNet,
+    "Roberta": RobertaForSeqClassification,
+}
+
+TRANSFORMER_MODELS = ["Roberta"]
+
 DATASET_CLS = {
     "DrugReview": DrugReview,
     "RCV1": RCV1,
@@ -48,6 +51,46 @@ def set_seed(seed: int):
     random.seed(seed)
 
     torch.backends.cudnn.deterministic = True
+
+
+def load_model(model_name: str, n_classes: int, model_cnf: dict):
+    if model_name in TRANSFORMER_MODELS:
+        pretrained_model_name = model_cnf["model"].pop("pretrained")
+        network = MODEL_CLS[model_name].from_pretrained(
+            pretrained_model_name, num_labels=n_classes, **model_cnf["model"]
+        )
+    else:
+        network = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+
+    return network
+
+
+def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
+    if model_name in TRANSFORMER_MODELS:
+        no_decay = ["bias", "LayerNorm.weight"]
+        param_groups = [
+            {
+                "params": [
+                    p
+                    for n, p in network.named_parameters()
+                    if not any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": decay,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in network.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = DenseSparseAdam(param_groups, lr=lr)
+    else:
+        optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
+
+    return optimizer
 
 
 @click.command(context_settings={"show_default": True})
@@ -216,6 +259,7 @@ def main(
     device = torch.device("cpu" if no_cuda else "cuda")
     num_gpus = torch.cuda.device_count()
 
+    is_transformer = model_name in TRANSFORMER_MODELS
     ################################## Prepare Dataset ###############################
     logger.info(f"Dataset: {dataset_name}")
 
@@ -275,12 +319,12 @@ def main(
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
-    network = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+    network = load_model(model_name, n_classes, model_cnf)
 
     network.to(device)
 
     if net_g:
-        network_g = MODEL_CLS[model_name](labels_num=n_classes, **model_cnf["model"])
+        network_g = load_model(model_name, n_classes, model_cnf)
         load_checkpoint(net_g, network_g, set_rng_state=False)
         network_g.to(device)
     else:
@@ -300,7 +344,7 @@ def main(
     ################################### Training #####################################
     if mode == "train":
         criteron = nn.CrossEntropyLoss()
-        optimizer = DenseSparseAdam(network.parameters(), lr=lr, weight_decay=decay)
+        optimizer = get_optimizer(model_name, network, lr, decay)
         if not no_scheduler:
             scheduler = CosineAnnealingLR(
                 optimizer, T_max=max(3, epoch // 10), eta_min=eta_min
@@ -370,6 +414,7 @@ def main(
             step=eval_step,
             early=early,
             early_criterion=early_criterion,
+            is_transformer=is_transformer,
             **model_cnf.get("train", {}),
         )
     ##################################################################################
@@ -382,7 +427,7 @@ def main(
 
     load_checkpoint(ckpt_path, network, set_rng_state=False)
 
-    evaluate(network, test_loader, n_classes, device)
+    evaluate(network, test_loader, n_classes, device, is_transformer)
     ##################################################################################
 
 
