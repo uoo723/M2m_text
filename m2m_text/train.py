@@ -102,7 +102,7 @@ def train_gen_step(
             "input_ids": data_x[0],
             "attention_mask": data_x[1],
         }
-        orig_inputs = model_seed(**data_x, return_emb=True, return_dict=False)[0]
+        orig_inputs = model_seed(**inputs, return_emb=True, return_dict=False)[0]
         other_inputs = None
     elif input_opts:
         with torch.no_grad():
@@ -267,7 +267,7 @@ def generation(
         outputs_g = model_g(
             outputs=(model_inputs,),
             pass_emb=True,
-            return_dcit=False,
+            return_dict=False,
         )[0]
     else:
         outputs_g = model_g(model_inputs, **last_input_opts)

@@ -3,9 +3,9 @@ Created on 2020/12/31
 @author Sangwoo Han
 """
 
+import copy
 import os
 import random
-from collections import Counter
 from pathlib import Path
 
 import click
@@ -54,6 +54,8 @@ def set_seed(seed: int):
 
 
 def load_model(model_name: str, num_labels: int, model_cnf: dict):
+    model_cnf = copy.deepcopy(model_cnf)
+
     if model_name in TRANSFORMER_MODELS:
         pretrained_model_name = model_cnf["model"].pop("pretrained")
         network = MODEL_CLS[model_name].from_pretrained(
