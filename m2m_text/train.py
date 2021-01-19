@@ -276,8 +276,12 @@ def generation(
     one_hot.scatter_(1, targets.view(-1, 1), 1)
     probs_g = torch.softmax(outputs_g, dim=1)[one_hot.bool()]
 
-    max_prob = probs_g.max().item()
-    mean_prob = probs_g.mean().item()
+    if probs_g.nelement() == 0:
+        max_prob = 0.0
+        mean_prob = 0.0
+    else:
+        max_prob = probs_g.max().item()
+        mean_prob = probs_g.mean().item()
 
     correct = (probs_g >= gamma) * torch.bernoulli(p_accept).bool().to(device)
 
