@@ -3,3 +3,4 @@ name: Roberta
 model:
   pretrained: roberta-base
   freeze_encoder: true
+  max_length: 200

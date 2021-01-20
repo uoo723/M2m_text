@@ -192,6 +192,7 @@ class RobertaForSeqClassification(RobertaPreTrainedModel):
         self.num_labels = config.num_labels
 
         self.roberta = RobertaModel(config, add_pooling_layer=False)
+        self.batch_m = nn.BatchNorm1d(config.max_length)
         self.classifier = RobertaClassificationHead(config)
 
         if freeze_encoder:
@@ -241,12 +242,12 @@ class RobertaForSeqClassification(RobertaPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-            sequence_output = outputs[0]
+            sequence_output = self.batch_m(outputs[0])
         else:
             sequence_output = outputs[0]
 
         if return_emb:
-            return outputs
+            return (sequence_output, *outputs[1:])
 
         logits = self.classifier(sequence_output)
 
