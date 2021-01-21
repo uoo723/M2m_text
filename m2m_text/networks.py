@@ -82,7 +82,7 @@ class AttentionRNN(Network):
             emb_out = self.batch_m(emb_out)
         elif not pass_hidden:
             emb_out, lengths, masks = inputs
-        else:  # dummy condition, it never reached.
+        else:
             emb_out, lengths, masks = None, None, None
 
         if return_emb:
