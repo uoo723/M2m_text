@@ -48,25 +48,25 @@ def load_checkpoint(
 ) -> int:
     ckpt = torch.load(ckpt_path, **torch_load_args)
 
-    if model is not None:
+    if model is not None and 'net' in ckpt:
         if isinstance(model, nn.DataParallel):
             model = model.module
 
         model.load_state_dict(ckpt["net"])
 
-    if optim:
+    if optim and 'optimizer' in ckpt:
         optim.load_state_dict(ckpt["optimizer"])
 
     if scheduler and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
 
-    if set_rng_state:
+    if set_rng_state and 'rng_state' in ckpt:
         torch.set_rng_state(ckpt["rng_state"][0])
         np.random.set_state(ckpt["rng_state"][1])
         random.setstate(ckpt["rng_state"][2])
 
     if return_other_states:
-        ret = (ckpt["epoch"], ckpt["other_states"])
+        ret = (ckpt["epoch"], ckpt.get("other_states", {}))
 
     else:
         ret = ckpt["epoch"]
