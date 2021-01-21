@@ -49,9 +49,11 @@ class AttentionRNN(Network):
         num_layers: int,
         linear_size: List[int],
         dropout: float,
+        max_length: int,
         **kwargs
     ):
         super(AttentionRNN, self).__init__(emb_size, **kwargs)
+        self.batch_m = nn.BatchNorm1d(max_length)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
         self.attention = MLAttention(num_labels, hidden_size * 2)
         self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
@@ -77,9 +79,10 @@ class AttentionRNN(Network):
 
         if not pass_emb and not pass_hidden:
             emb_out, lengths, masks = self.emb(inputs, **kwargs)
+            emb_out = self.batch_m(emb_out)
         elif not pass_hidden:
             emb_out, lengths, masks = inputs
-        else:
+        else:  # dummy condition, it never reached.
             emb_out, lengths, masks = None, None, None
 
         if return_emb:

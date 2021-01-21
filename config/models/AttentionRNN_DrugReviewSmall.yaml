@@ -5,6 +5,7 @@ model:
   num_layers: 1
   linear_size: [256]
   dropout: 0.5
+  max_length: 200
   emb_trainable: false
   emb_size: 300
   emb_init: data/drugReviewSmall/emb_init.npy  # drugReview
