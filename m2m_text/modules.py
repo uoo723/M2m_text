@@ -82,7 +82,9 @@ class LSTMEncoder(nn.Module):
             self.lstm.train()
 
         outputs, _ = nn.utils.rnn.pad_packed_sequence(
-            self.lstm(packed_inputs, (hidden_init, cell_init))[0], batch_first=True
+            self.lstm(packed_inputs, (hidden_init, cell_init))[0],
+            total_length=inputs.size(1),
+            batch_first=True,
         )
 
         if training:
