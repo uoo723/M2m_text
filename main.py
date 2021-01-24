@@ -201,6 +201,24 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default="bal_acc",
     help="Early stopping criterion",
 )
+@click.option(
+    "--perturb-attack",
+    type=click.Choice(["l2", "inf"]),
+    default="l2",
+    help="Attack type for random perturbation",
+)
+@click.option(
+    "--perturb-eps",
+    type=click.FLOAT,
+    default=0.5,
+    help="Epsilon for random perturbation",
+)
+@click.option(
+    "--step-attack",
+    type=click.Choice(["l2", "inf"]),
+    default="inf",
+    help="Attack type for step phase",
+)
 def main(
     mode,
     test_run,
@@ -235,6 +253,9 @@ def main(
     eval_step,
     early,
     early_criterion,
+    perturb_attack,
+    perturb_eps,
+    step_attack,
 ):
     yaml = YAML(typ="safe")
     model_cnf = yaml.load(Path(model_cnf))
@@ -417,6 +438,9 @@ def main(
             early=early,
             early_criterion=early_criterion,
             is_transformer=is_transformer,
+            perturb_attack=perturb_attack,
+            perturb_eps=perturb_eps,
+            step_attack=step_attack,
             **model_cnf.get("train", {}),
         )
     ##################################################################################

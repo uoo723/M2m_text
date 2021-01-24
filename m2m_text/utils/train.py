@@ -31,8 +31,10 @@ def random_perturb(inputs, attack, eps):
     """
     if attack == "inf":
         r_inputs = 2 * (torch.rand_like(inputs) - 0.5) * eps
-    else:
+    elif attack == "l2":
         r_inputs = (torch.rand_like(inputs) - 0.5).renorm(p=2, dim=1, maxnorm=eps)
+    else:
+        raise ValueError(f"Invalid atack type. {attack} (inf|l2)")
     return r_inputs
 
 

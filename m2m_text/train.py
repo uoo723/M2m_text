@@ -82,6 +82,9 @@ def train_gen_step(
     input_opts={},
     gen_input_opts={},
     last_input_opts={},
+    perturb_attack="l2",
+    perturb_eps=0.5,
+    step_attack="inf",
 ):
     model.train()
     model_seed.eval()
@@ -159,6 +162,9 @@ def train_gen_step(
         attack_iter,
         gen_input_opts,
         last_input_opts,
+        perturb_attack=perturb_attack,
+        perturb_eps=perturb_eps,
+        step_attack=step_attack,
     )
 
     num_gen = sum_t(correct_mask)
@@ -207,6 +213,9 @@ def generation(
     max_iter=10,
     gen_input_opts={},
     last_input_opts={},
+    perturb_attack="l2",
+    perturb_eps=0.5,
+    step_attack="inf",
 ):
     model_g.eval()
     model_r.eval()
@@ -220,7 +229,7 @@ def generation(
     input_gen_size = torch.Size([-1] + [1] * input_dim)
 
     if random_start:
-        random_noise = random_perturb(inputs, "l2", 0.5)
+        random_noise = random_perturb(inputs, perturb_attack, perturb_eps)
         # print("before:", inputs)
         # inputs = torch.clamp(inputs + random_noise, 0, 1)
         inputs = inputs + random_noise
@@ -254,7 +263,7 @@ def generation(
         )
         (grad,) = torch.autograd.grad(loss, [inputs])
 
-        inputs = inputs - make_step(grad, "inf", step_size, input_gen_size)
+        inputs = inputs - make_step(grad, step_attack, step_size, input_gen_size)
 
     inputs = inputs.detach()
 
@@ -325,6 +334,9 @@ def train(
     gen_input_opts={},  # Te be passed to gneration()
     last_input_opts={},  # To be passed to train_gen_step() at the last phase of generation
     is_transformer=False,
+    perturb_attack="l2",
+    perturb_eps=0.5,
+    step_attack="inf",
 ):
     global_step, best = 0, 0.0
 
@@ -406,6 +418,9 @@ def train(
                     input_opts=input_opts,
                     gen_input_opts=gen_input_opts,
                     last_input_opts=last_input_opts,
+                    perturb_attack=perturb_attack,
+                    perturb_eps=perturb_eps,
+                    step_attack=step_attack,
                 )
 
                 num_gen_list.append(num_gen)
