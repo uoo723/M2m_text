@@ -2,20 +2,18 @@
 
 args=(
     --model-cnf config/models/Roberta.yaml
-    --data-cnf config/datasets/DrugReviewSmall_Roberta.yaml
-    --epoch 250
+    --data-cnf config/datasets/DrugReviewSmallv2_Roberta.yaml
+    --epoch 200
     --lr 1e-3
     --eta-min 1e-5
-    # --no-scheduler
     --train-batch-size 100
     --test-batch-size 500
     --ckpt-name baseline
     --no-over
     --early-criterion 'acc'
-    --seed 5
+    --seed 0
     --swa-warmup -1
     --early 70
-    # --net-t ./checkpoint/baseline_Roberta_DrugReviewSmall_1_last.pt
 )
 
 python main.py "${args[@]}"
