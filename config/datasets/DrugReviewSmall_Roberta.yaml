@@ -1,6 +1,6 @@
 name: DrugReviewSmall
 
-valid_size: 0.1
+valid_size: 0.2
 
 dataset:
   maxlen: 200
