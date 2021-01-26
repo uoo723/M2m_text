@@ -309,3 +309,17 @@ class DrugReviewSmall(DrugReview):
         ("train.csv", "52ac786fd1bdc1891f61439aa6596260"),
         ("test.csv", "1bd45029abb30e7de9f60bbd0a25d529"),
     ]
+
+
+class DrugReviewSmallv2(DrugReview):
+    base_folder = "drugReviewSmallv2"
+
+    url = "https://drive.google.com/uc?id=1NfjI481TaxHtcByijM5jAEXDK4arAZoc"
+
+    filename = "drugReviewSmallv2.tar.gz"
+    tgz_md5 = "f444c73417b55302896dab676e088419"
+
+    file_list = [
+        ("train.csv", "c44683ecbf08c41e3d6b14a76a79131e"),
+        ("test.csv", "7ef03c50d824acf0385dac4ac4849ee2"),
+    ]

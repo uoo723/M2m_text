@@ -18,7 +18,7 @@ from ruamel.yaml import YAML
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from m2m_text.datasets import RCV1, DrugReview, DrugReviewSmall
+from m2m_text.datasets import RCV1, DrugReview, DrugReviewSmall, DrugReviewSmallv2
 from m2m_text.networks import AttentionRNN, FCNet, RobertaForSeqClassification
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
@@ -37,6 +37,7 @@ DATASET_CLS = {
     "DrugReview": DrugReview,
     "RCV1": RCV1,
     "DrugReviewSmall": DrugReviewSmall,
+    "DrugReviewSmallv2": DrugReviewSmallv2,
 }
 
 
