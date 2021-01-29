@@ -2,11 +2,10 @@
 
 args=(
     --model-cnf config/models/Roberta.yaml
-    --data-cnf config/datasets/DrugReviewSmall_Roberta.yaml
+    --data-cnf config/datasets/DrugReviewSmallv2_Roberta.yaml
     --mode 'eval'
     --test-run
-    --seed 3
-    --net-t ./checkpoint/M2m_Roberta_DrugReviewSmall_4.pt
+    --net-t ./checkpoint/baseline_Roberta_DrugReviewSmallv2_3_last.pt
 )
 
 python main.py "${args[@]}"
