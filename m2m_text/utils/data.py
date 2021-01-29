@@ -10,6 +10,7 @@ from typing import Iterable, Optional, Union
 import joblib
 import numpy as np
 from gensim.models import KeyedVectors
+from sklearn.preprocessing import MultiLabelBinarizer
 from torch.utils.data import Dataset
 
 from ..preprocessing import LabelEncoder, build_vocab, tokenize
@@ -56,6 +57,17 @@ def get_le(
     le.fit(labels)
     joblib.dump(le, le_path)
     return le
+
+
+def get_mlb(
+    mlb_path: str, labels: Optional[Iterable] = None, force: bool = False
+) -> MultiLabelBinarizer:
+    if os.path.isfile(mlb_path) and not force:
+        return joblib.load(mlb_path)
+    mlb = MultiLabelBinarizer(sparse_output=True)
+    mlb.fit(labels)
+    joblib.dump(mlb, mlb_path)
+    return mlb
 
 
 def get_tokenized_texts(

@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 
 from ..preprocessing import truncate_text
 from ..utils import download_from_url, extract_archive
-from ..utils.data import get_emb_init, get_le, get_tokenized_texts, get_vocab
+from ..utils.data import get_emb_init, get_le, get_mlb, get_tokenized_texts, get_vocab
 from ._base import Dataset, TDataX, TDataXTensor, TDataY, TDataYTensor
 
 
@@ -40,6 +40,7 @@ class TextDataset(Dataset):
         pad (str): Pad token.
         unknwon (str): Unknwon token.
         tokenizer_model_name (str, optional): bert tokenizer model name.
+        multi_label (bool): Set true if y is multi label.
     """
 
     def __init__(
@@ -52,6 +53,7 @@ class TextDataset(Dataset):
         pad: str = "<PAD>",
         unknown: str = "<UNK>",
         tokenizer_model_name: Optional[str] = None,
+        multi_label: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -67,6 +69,7 @@ class TextDataset(Dataset):
         self.unknown = unknown
         self.maxlen = maxlen
         self.tokenizer_model_name = tokenizer_model_name
+        self.get_le = get_mlb if multi_label else get_le
 
     def download_w2v_model(self, quiet: bool = False) -> None:
         """Download w2v model
@@ -154,7 +157,7 @@ class TextDataset(Dataset):
 
         self._labels = labels
 
-        le = get_le(self.le_path, labels)
+        le = self.get_le(self.le_path, labels)
         labels = le.transform(labels)
 
         return (input_ids, attention_mask), labels
@@ -191,7 +194,7 @@ class TextDataset(Dataset):
 
         self._labels = labels
 
-        le = get_le(self.le_path, labels)
+        le = self.get_le(self.le_path, labels)
         labels = le.transform(labels)
 
         self.emb_init = get_emb_init(
@@ -323,3 +326,87 @@ class DrugReviewSmallv2(DrugReview):
         ("train.csv", "c44683ecbf08c41e3d6b14a76a79131e"),
         ("test.csv", "7ef03c50d824acf0385dac4ac4849ee2"),
     ]
+
+
+class EURLex(TextDataset):
+    """`EURLex Dataset.
+
+    Args:
+        root (string, optional): Root directory of dataset. default: ./data
+        train (bool, optional): If True, creates dataset from training set,
+            otherwise creates from test set. default: True
+        maxlen (int, optional): Maximum length of input text. default: 500
+    """
+
+    base_folder = "EURLex"
+
+    url = "https://drive.google.com/uc?id=10A3_QWetbknuOpv4hK-F03T4hQGaufxO"
+
+    filename = "EURLex.tar.gz"
+    tgz_md5 = "d055ef38681cd6b78844e335c3bab1e7"
+
+    file_list = [
+        ("train_raw.npz", "62e50968bc5c469b6ac0270e27cc891d"),
+        ("test_raw.npz", "87fef94edf237e2071fd1827618824c6"),
+    ]
+
+    w2v_model = "glove.840B.300d.gensim"
+    w2v_model_url = "https://drive.google.com/uc?id=1q9n32NeCVuCJpZK-aoH48-iExW2Hf9nS"
+    w2v_model_tgz_md5 = "baa5434ab9d5833b56805dc12f0094a0"
+
+    train_npz = "train.npz"
+    test_npz = "test.npz"
+
+    def __init__(
+        self,
+        root: str = "./data",
+        train: bool = True,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(root=root, train=train, multi_label=True, *args, **kwargs)
+        self.download()
+
+        if not self.tokenizer_model_name:
+            self.download_w2v_model()
+
+        self.texts, self.labels = self.load_data()
+
+    def __len__(self):
+        return self.labels.shape[0]
+
+    def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
+        if type(self.texts) == tuple:
+            texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        else:
+            texts = torch.from_numpy(self.texts[index])
+
+        return texts, torch.from_numpy(self.labels[index].toarray().squeeze())
+
+    def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        npz_path = os.path.join(
+            self.data_dir, "train_raw.npz" if self.train else "test_raw.npz"
+        )
+
+        with np.load(npz_path, allow_pickle=True) as npz:
+            return npz["texts"], npz["labels"]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+    @property
+    def x(self) -> TDataX:
+        return self.texts
+
+    @x.setter
+    def x(self, x):
+        self.texts = x
+
+    @property
+    def y(self) -> TDataY:
+        return self.labels
+
+    @y.setter
+    def y(self, y):
+        self.labels = y
