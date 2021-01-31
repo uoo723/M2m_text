@@ -4,18 +4,21 @@ Created on 2021/01/07
 """
 import os
 from collections import deque
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
+import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from logzero import logger
+from sklearn.preprocessing import MultiLabelBinarizer
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from .loss import classwise_loss
-from .metrics import get_accuracy
+from .metrics import get_accuracy, get_inv_propensity, get_precision_results
+from .utils.data import get_mlb
 from .utils.model import save_checkpoint
 from .utils.train import (
     clip_gradient,
@@ -337,6 +340,7 @@ def train(
     perturb_attack="l2",
     perturb_eps=0.5,
     step_attack="inf",
+    multi_label=False,
 ):
     global_step, best = 0, 0.0
 
@@ -361,6 +365,15 @@ def train(
     last_ckpt_path += "_last" + ext
 
     max_prob, mean_prob = 0, 0
+
+    if multi_label:
+        inv_w = get_inv_propensity(
+            sp.vstack([train_loader.dataset.y, valid_loader.dataset.y])
+        )
+        mlb = get_mlb(train_loader.dataset.le_path)
+    else:
+        inv_w = None
+        mlb = None
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -447,20 +460,34 @@ def train(
                 swa_step(model, swa_state)
                 swap_swa_params(model, swa_state)
 
-                labels, targets = zip(
-                    *[
-                        (
-                            predict_step(model, batch[0], device, is_transformer)[1],
-                            batch[1].numpy(),
-                        )
-                        for batch in valid_loader
-                    ]
-                )
+                if multi_label:
+                    labels = np.concatenate(
+                        [
+                            predict_step(
+                                model, batch[0], device, is_transformer, multi_label
+                            )[1]
+                            for batch in valid_loader
+                        ]
+                    )
+                    targets = valid_loader.dataset.raw_y
+                    results = get_precision_results(labels, targets, inv_w, mlb)
+                else:
+                    labels, targets = zip(
+                        *[
+                            (
+                                predict_step(
+                                    model, batch[0], device, is_transformer, multi_label
+                                )[1],
+                                batch[1].numpy(),
+                            )
+                            for batch in valid_loader
+                        ]
+                    )
 
-                labels = np.concatenate(labels)
-                targets = np.concatenate(targets)
+                    labels = np.concatenate(labels)
+                    targets = np.concatenate(targets)
 
-                results = get_accuracy(labels, targets)
+                    results = get_accuracy(labels, targets)
 
                 other_states = {
                     "swa_state": swa_state,
@@ -506,12 +533,19 @@ def train(
                 else:
                     gen_log_msg = ""
 
-                logger.info(
-                    f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
-                    f"early stop: {e} "
-                    f"acc: {round(results['acc'], 4)} "
-                    f"bal acc: {round(results['bal_acc'], 4)}" + gen_log_msg
-                )
+                log_msg = f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
+                log_msg += f"early stop: {e} "
+
+                if multi_label:
+                    log_msg += f"p@5: {round(results['p5'], 4)} "
+                    log_msg += f"psp@5: {round(results['psp5'], 4)}"
+                else:
+                    log_msg += f"acc: {round(results['acc'], 4)} "
+                    log_msg += f"bal acc: {round(results['bal_acc'], 4)}"
+
+                log_msg += gen_log_msg
+
+                logger.info(log_msg)
 
         if scheduler is not None:
             scheduler.step()
@@ -532,6 +566,8 @@ def predict_step(
     data_x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
     device: torch.device,
     is_transformer: bool = False,
+    multi_label: bool = False,
+    topk: int = 5,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     model.eval()
     with torch.no_grad():
@@ -544,8 +580,13 @@ def predict_step(
         else:
             logits = model(data_x.to(device))
 
-        scores = F.softmax(logits, dim=-1)
-        labels = torch.argmax(scores, dim=-1)
+        if multi_label:
+            scores, labels = torch.topk(logits, topk)
+            scores = torch.sigmoid(scores)
+        else:
+            scores = F.softmax(logits, dim=-1)
+            labels = torch.argmax(scores, dim=-1)
+
         return scores.cpu(), labels.cpu()
 
 
@@ -555,22 +596,46 @@ def evaluate(
     num_classes: int,
     device: torch.device,
     is_transformer: bool = False,
+    multi_label: bool = False,
+    inv_w: Optional[np.ndarray] = None,
+    mlb: Optional[MultiLabelBinarizer] = None,
 ):
-    labels, targets = zip(
-        *[
-            (
-                predict_step(model, batch[0], device, is_transformer)[1],
-                batch[1].numpy(),
-            )
-            for batch in tqdm(dataloader, desc="Predict")
-        ]
-    )
+    if multi_label:
+        labels = np.concatenate(
+            [
+                predict_step(model, batch[0], device, is_transformer, multi_label)[1]
+                for batch in tqdm(dataloader, desc="Predict")
+            ]
+        )
+        targets = dataloader.dataset.raw_y
+        results = get_precision_results(labels, targets, inv_w, mlb)
 
-    labels = np.concatenate(labels)
-    targets = np.concatenate(targets)
+        logger.info(
+            f"\np@1: {round(results['p1'], 4)}"
+            f"\np@3: {round(results['p3'], 4)}"
+            f"\np@5: {round(results['p5'], 4)}"
+            f"\npsp@1: {round(results['psp1'], 4)}"
+            f"\npsp@3: {round(results['psp3'], 4)}"
+            f"\npsp@5: {round(results['psp5'], 4)}"
+        )
+    else:
+        labels, targets = zip(
+            *[
+                (
+                    predict_step(model, batch[0], device, is_transformer, multi_label)[
+                        1
+                    ],
+                    batch[1].numpy(),
+                )
+                for batch in tqdm(dataloader, desc="Predict")
+            ]
+        )
 
-    results = get_accuracy(labels, targets)
+        labels = np.concatenate(labels)
+        targets = np.concatenate(targets)
 
-    logger.info(
-        f"acc: {round(results['acc'], 4)} bal acc: {round(results['bal_acc'], 4)}"
-    )
+        results = get_accuracy(labels, targets)
+
+        logger.info(
+            f"acc: {round(results['acc'], 4)} bal acc: {round(results['bal_acc'], 4)}"
+        )

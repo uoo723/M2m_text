@@ -381,7 +381,7 @@ class EURLex(TextDataset):
         else:
             texts = torch.from_numpy(self.texts[index])
 
-        return texts, torch.from_numpy(self.labels[index].toarray().squeeze())
+        return texts, torch.from_numpy(self.labels[index].toarray().squeeze()).float()
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         npz_path = os.path.join(

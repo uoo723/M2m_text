@@ -11,18 +11,32 @@ from pathlib import Path
 import click
 import logzero
 import numpy as np
+import scipy.sparse as sp
 import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
+from scipy.sparse import csr_matrix
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from m2m_text.datasets import RCV1, DrugReview, DrugReviewSmall, DrugReviewSmallv2
+from m2m_text.datasets import (
+    RCV1,
+    DrugReview,
+    DrugReviewSmall,
+    DrugReviewSmallv2,
+    EURLex,
+)
+from m2m_text.metrics import get_inv_propensity
 from m2m_text.networks import AttentionRNN, FCNet, RobertaForSeqClassification
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
-from m2m_text.utils.data import get_le, get_n_samples_per_class, get_oversampled_data
+from m2m_text.utils.data import (
+    get_le,
+    get_mlb,
+    get_n_samples_per_class,
+    get_oversampled_data,
+)
 from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {
@@ -38,7 +52,10 @@ DATASET_CLS = {
     "RCV1": RCV1,
     "DrugReviewSmall": DrugReviewSmall,
     "DrugReviewSmallv2": DrugReviewSmallv2,
+    "EURLex": EURLex,
 }
+
+MULTI_LABEL_DATASETS = ["EURLex"]
 
 
 def set_logger(log_path: str):
@@ -198,7 +215,7 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 )
 @click.option(
     "--early-criterion",
-    type=click.Choice(["acc", "bal_acc"]),
+    type=click.Choice(["acc", "bal_acc", "p1", "p3", "p5", "psp1", "psp3", "psp5"]),
     default="bal_acc",
     help="Early stopping criterion",
 )
@@ -284,6 +301,8 @@ def main(
     num_gpus = torch.cuda.device_count()
 
     is_transformer = model_name in TRANSFORMER_MODELS
+    multi_label = dataset_name in MULTI_LABEL_DATASETS
+
     ################################## Prepare Dataset ###############################
     logger.info(f"Dataset: {dataset_name}")
 
@@ -296,9 +315,12 @@ def main(
     le = get_le(train_dataset.le_path)
     num_labels = len(le.classes_)
 
-    n_samples_per_class = get_n_samples_per_class(
-        np.concatenate([train_dataset.y, valid_dataset.y])
-    )
+    if type(train_dataset.y) == csr_matrix:
+        y = sp.vstack([train_dataset.y, valid_dataset.y])
+    else:
+        y = np.concatenate([train_dataset.y, valid_dataset.y])
+
+    n_samples_per_class = get_n_samples_per_class(y)
 
     logger.info(f"# of train dataset: {len(train_dataset):,}")
     logger.info(f"# of valid dataset: {len(valid_dataset):,}")
@@ -367,7 +389,7 @@ def main(
 
     ################################### Training #####################################
     if mode == "train":
-        criteron = nn.CrossEntropyLoss()
+        criteron = nn.BCEWithLogitsLoss() if multi_label else nn.CrossEntropyLoss()
         optimizer = get_optimizer(model_name, network, lr, decay)
         if not no_scheduler:
             scheduler = CosineAnnealingLR(
@@ -442,6 +464,7 @@ def main(
             perturb_attack=perturb_attack,
             perturb_eps=perturb_eps,
             step_attack=step_attack,
+            multi_label=multi_label,
             **model_cnf.get("train", {}),
         )
     ##################################################################################
@@ -454,7 +477,23 @@ def main(
 
     load_checkpoint(ckpt_path, network, set_rng_state=False)
 
-    evaluate(network, test_loader, num_labels, device, is_transformer)
+    if multi_label:
+        inv_w = get_inv_propensity(sp.vstack([train_dataset.y, valid_dataset.y]))
+        mlb = get_mlb(train_dataset.le_path)
+    else:
+        inv_w = None
+        mlb = None
+
+    evaluate(
+        network,
+        test_loader,
+        num_labels,
+        device,
+        is_transformer,
+        multi_label,
+        inv_w,
+        mlb,
+    )
     ##################################################################################
 
 

@@ -10,6 +10,7 @@ from typing import Iterable, Optional, Union
 import joblib
 import numpy as np
 from gensim.models import KeyedVectors
+from scipy.sparse import csr_matrix
 from sklearn.preprocessing import MultiLabelBinarizer
 from torch.utils.data import Dataset
 
@@ -146,20 +147,22 @@ def get_oversampled_data(
     return selected_list
 
 
-def get_n_samples_per_class(y: np.ndarray):
+def get_n_samples_per_class(y: Union[np.ndarray, csr_matrix]):
     """Returns num of samples of class
 
     Args:
         y (np.ndarray): 1-D numpy array of class.
-
     Returns:
         n_samples_per_class (np.ndarray): Number of samples per class 1-D array.
             number samples for class i is n_samples_per_calss[i]
     """
-    cnt = Counter(y)
-    n_samples_per_class = np.zeros(len(cnt), dtype=np.long)
+    if type(y) == csr_matrix:
+        n_samples_per_class = y.sum(axis=0).A1
+    else:
+        cnt = Counter(y)
+        n_samples_per_class = np.zeros(len(cnt), dtype=np.long)
 
-    for i, count in cnt.items():
-        n_samples_per_class[i] = count
+        for i, count in cnt.items():
+            n_samples_per_class[i] = count
 
     return n_samples_per_class
