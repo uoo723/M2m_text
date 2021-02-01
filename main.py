@@ -28,7 +28,12 @@ from m2m_text.datasets import (
     EURLex,
 )
 from m2m_text.metrics import get_inv_propensity
-from m2m_text.networks import AttentionRNN, FCNet, RobertaForSeqClassification
+from m2m_text.networks import (
+    AttentionRNN,
+    FCNet,
+    LaRoberta,
+    RobertaForSeqClassification,
+)
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
 from m2m_text.utils.data import (
@@ -43,9 +48,10 @@ MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
     "FCNet": FCNet,
     "Roberta": RobertaForSeqClassification,
+    "LaRoberta": LaRoberta,
 }
 
-TRANSFORMER_MODELS = ["Roberta"]
+TRANSFORMER_MODELS = ["Roberta", "LaRoberta"]
 
 DATASET_CLS = {
     "DrugReview": DrugReview,

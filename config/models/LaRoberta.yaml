@@ -1,0 +1,7 @@
+name: LaRoberta
+
+model:
+  pretrained: roberta-base
+  freeze_encoder: true
+  max_length: 200
+  linear_size: [256, 128]
