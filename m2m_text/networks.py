@@ -343,7 +343,7 @@ class LaRoberta(RobertaPreTrainedModel):
             )
             sequence_output = self.batch_m(outputs[0])
         else:
-            sequence_output = outputs[0]
+            sequence_output, attention_mask = outputs[0], outputs[1]
 
         if return_emb:
             return (sequence_output, *outputs[1:])

@@ -243,6 +243,12 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default="inf",
     help="Attack type for step phase",
 )
+@click.option(
+    "--max-n-labels",
+    type=click.INT,
+    default=5,
+    help="Maximum number of labels to be generated for multi-label dataset",
+)
 def main(
     mode,
     test_run,
@@ -280,6 +286,7 @@ def main(
     perturb_attack,
     perturb_eps,
     step_attack,
+    max_n_labels,
 ):
     yaml = YAML(typ="safe")
     model_cnf = yaml.load(Path(model_cnf))
@@ -471,6 +478,7 @@ def main(
             perturb_eps=perturb_eps,
             step_attack=step_attack,
             multi_label=multi_label,
+            max_n_labels=max_n_labels,
             **model_cnf.get("train", {}),
         )
     ##################################################################################

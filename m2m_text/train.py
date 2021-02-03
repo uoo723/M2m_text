@@ -88,20 +88,13 @@ def train_gen_step(
     perturb_attack="l2",
     perturb_eps=0.5,
     step_attack="inf",
+    multi_label=False,
+    adj=None,
+    max_n_labels=5,
 ):
     model.train()
     model_seed.eval()
     batch_size = data_y.size(0)
-
-    if imb_type is not None:
-        gen_probs = n_samples_per_class[data_y] / torch.max(n_samples_per_class)
-        # Generation index
-        gen_index = (1 - torch.bernoulli(gen_probs)).nonzero(as_tuple=False)
-        gen_index = gen_index.squeeze()
-        gen_targets = data_y[gen_index]
-    else:
-        gen_index = torch.arange(batch_size).squeeze()
-        gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
 
     if is_transformer:
         inputs = {
@@ -109,7 +102,7 @@ def train_gen_step(
             "attention_mask": data_x[1],
         }
         orig_inputs = model_seed(**inputs, return_emb=True, return_dict=False)[0]
-        other_inputs = None
+        other_inputs = (data_x[1],)
     elif input_opts:
         with torch.no_grad():
             orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
@@ -125,19 +118,86 @@ def train_gen_step(
     inputs = orig_inputs.clone()
     targets = data_y.clone()
 
-    bs = n_samples_per_class[data_y].repeat(gen_index.size(0), 1)
-    gs = n_samples_per_class[gen_targets].unsqueeze(-1)
+    p_accept = None
+    gen_target_rows = None
+    gen_target_cols = None
+    target_index = None
+    rows = None
 
-    delta = F.relu(bs - gs)
-    p_accept = 1 - beta ** delta
-    mask_valid = p_accept.sum(-1) > 0
+    if multi_label:
+        # Find samples with major class
+        rows, cols = data_y.nonzero(as_tuple=True)
+        target_probs = n_samples_per_class[cols] / torch.max(n_samples_per_class)
+        target_index = torch.bernoulli(target_probs).nonzero(as_tuple=True)[0]
 
-    gen_index = gen_index[mask_valid]
-    gen_targets = gen_targets[mask_valid]
-    p_accept = p_accept[mask_valid]
+        # Select minor classes
+        gen_rows, gen_cols = adj[cols[target_index].cpu()].nonzero()
+        gen_rows = torch.from_numpy(gen_rows).long()
+        gen_cols = torch.from_numpy(gen_cols).long()
+        gen_probs = 1 - n_samples_per_class[gen_cols] / torch.max(n_samples_per_class)
+        gen_index = torch.bernoulli(gen_probs).nonzero(as_tuple=True)[0]
 
-    select_idx = torch.multinomial(p_accept, 1, replacement=True).squeeze()
-    p_accept = p_accept.gather(1, select_idx.unsqueeze(-1)).squeeze()
+        # Append minor classes in target samples
+        select_idx = []
+        gen_labels_list = []
+
+        for i in range(target_index.shape[0]):
+            orig_labels = data_y[rows[target_index[i]]].nonzero(as_tuple=True)[0]
+            n_labels = orig_labels.shape[0]
+
+            if n_labels >= max_n_labels or rows[target_index[i]] in select_idx:
+                continue
+
+            row_index = (gen_rows[gen_index] == i).nonzero(as_tuple=True)[0]
+            candidate_labels = gen_cols[gen_index][row_index]
+            n_candidate_labels = candidate_labels.shape[0]
+            n_gen_labels = min(max_n_labels - n_labels, n_candidate_labels)
+
+            if n_gen_labels == 0:
+                continue
+
+            random_index = torch.randint(n_candidate_labels, (n_gen_labels,))
+            gen_labels = candidate_labels[random_index].to(device)
+            new_labels = torch.cat([orig_labels, gen_labels])
+            data_y[rows[target_index[i]]][new_labels] = 1.0
+
+            select_idx.append(rows[target_index[i]])
+            gen_labels_list.append(gen_labels)
+
+        select_idx = torch.hstack(select_idx)
+
+        gen_targets = data_y[select_idx]
+
+        gen_target_rows = torch.hstack(
+            [torch.tensor([i] * len(t)) for i, t in enumerate(gen_labels_list)]
+        )
+
+        gen_target_cols = torch.hstack(gen_labels_list)
+
+    else:
+        if imb_type is not None:
+            gen_probs = n_samples_per_class[data_y] / torch.max(n_samples_per_class)
+            # Generation index
+            gen_index = (1 - torch.bernoulli(gen_probs)).nonzero(as_tuple=False)
+            gen_index = gen_index.squeeze()
+            gen_targets = data_y[gen_index]
+        else:
+            gen_index = torch.arange(batch_size).squeeze()
+            gen_targets = torch.randint(num_classes, (batch_size,)).to(device).long()
+
+        bs = n_samples_per_class[data_y].repeat(gen_index.size(0), 1)
+        gs = n_samples_per_class[gen_targets].unsqueeze(-1)
+
+        delta = F.relu(bs - gs)
+        p_accept = 1 - beta ** delta
+        mask_valid = p_accept.sum(-1) > 0
+
+        gen_index = gen_index[mask_valid]
+        gen_targets = gen_targets[mask_valid]
+        p_accept = p_accept[mask_valid]
+
+        select_idx = torch.multinomial(p_accept, 1, replacement=True).squeeze()
+        p_accept = p_accept.gather(1, select_idx.unsqueeze(-1)).squeeze()
 
     if other_inputs:
         seed_inputs = (orig_inputs[select_idx],) + tuple(
@@ -146,7 +206,7 @@ def train_gen_step(
     else:
         seed_inputs = orig_inputs[select_idx]
 
-    seed_targets = data_y[select_idx]
+    seed_targets = targets[select_idx]
 
     gen_inputs, correct_mask, max_prob, mean_prob = generation(
         model,
@@ -168,25 +228,43 @@ def train_gen_step(
         perturb_attack=perturb_attack,
         perturb_eps=perturb_eps,
         step_attack=step_attack,
+        multi_label=multi_label,
+        gen_target_rows=gen_target_rows,
+        gen_target_cols=gen_target_cols,
     )
 
-    num_gen = sum_t(correct_mask)
-    gen_c_idx = gen_index[correct_mask]
+    num_gen = (
+        gen_target_rows[correct_mask].unique().shape[0]
+        if multi_label
+        else sum_t(correct_mask)
+    )
 
     if num_gen > 0:
-        gen_inputs_c = gen_inputs[correct_mask]
-        gen_targets_c = gen_targets[correct_mask]
+        if multi_label:
+            gen_c_idx = select_idx[gen_target_rows[correct_mask].unique()]
+            inputs[gen_c_idx] = gen_inputs[gen_target_rows[correct_mask].unique()]
+            gen_targets[(gen_target_rows, gen_target_cols)] = 0.0
+            gen_targets[
+                (gen_target_rows[correct_mask], gen_target_cols[correct_mask])
+            ] = 1.0
+            targets[gen_c_idx] = gen_targets[gen_target_rows[correct_mask].unique()]
+        else:
+            gen_c_idx = gen_index[correct_mask]
+            gen_inputs_c = gen_inputs[correct_mask]
+            gen_targets_c = gen_targets[correct_mask]
 
-        inputs[gen_c_idx] = gen_inputs_c
-        targets[gen_c_idx] = gen_targets_c
+            inputs[gen_c_idx] = gen_inputs_c
+            targets[gen_c_idx] = gen_targets_c
 
     if other_inputs:
         model_inputs = (inputs, *other_inputs)
+    elif is_transformer:
+        model_inputs = (inputs,)
     else:
         model_inputs = inputs
 
     if is_transformer:
-        outputs = model(outputs=(model_inputs,), pass_emb=True, return_dict=False)[0]
+        outputs = model(outputs=model_inputs, pass_emb=True, return_dict=False)[0]
     else:
         outputs = model(model_inputs, **last_input_opts)
     loss = criterion(outputs, targets)
@@ -219,6 +297,9 @@ def generation(
     perturb_attack="l2",
     perturb_eps=0.5,
     step_attack="inf",
+    multi_label=False,
+    gen_target_rows=None,
+    gen_target_cols=None,
 ):
     model_g.eval()
     model_r.eval()
@@ -243,17 +324,19 @@ def generation(
 
         if other_inputs:
             model_inputs = (inputs, *other_inputs)
+        elif is_transformer:
+            model_inputs = (inputs,)
         else:
             model_inputs = inputs
 
         if is_transformer:
             outputs_g = model_g(
-                outputs=(model_inputs,),
+                outputs=model_inputs,
                 pass_emb=True,
                 return_dict=False,
             )[0]
             outputs_r = model_r(
-                outputs=(model_inputs,),
+                outputs=model_inputs,
                 pass_emb=True,
                 return_dict=False,
             )[0]
@@ -262,7 +345,7 @@ def generation(
             outputs_r = model_r(model_inputs, **gen_input_opts)
 
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
-            outputs_r, seed_targets
+            outputs_r, seed_targets, multi_label
         )
         (grad,) = torch.autograd.grad(loss, [inputs])
 
@@ -272,21 +355,29 @@ def generation(
 
     if other_inputs:
         model_inputs = (inputs, *other_inputs)
+    elif is_transformer:
+        model_inputs = (inputs,)
     else:
         model_inputs = inputs
 
-    if is_transformer:
-        outputs_g = model_g(
-            outputs=(model_inputs,),
-            pass_emb=True,
-            return_dict=False,
-        )[0]
-    else:
-        outputs_g = model_g(model_inputs, **last_input_opts)
+    with torch.no_grad():
+        if is_transformer:
+            outputs_g = model_g(
+                outputs=model_inputs,
+                pass_emb=True,
+                return_dict=False,
+            )[0]
+        else:
+            outputs_g = model_g(model_inputs, **last_input_opts)
 
-    one_hot = torch.zeros_like(outputs_g)
-    one_hot.scatter_(1, targets.view(-1, 1), 1)
-    probs_g = torch.softmax(outputs_g, dim=1)[one_hot.bool()]
+    if multi_label:
+        probs_g = torch.sigmoid(outputs_g)[(gen_target_rows, gen_target_cols)]
+        correct = probs_g >= gamma
+    else:
+        one_hot = torch.zeros_like(outputs_g)
+        one_hot.scatter_(1, targets.view(-1, 1), 1)
+        probs_g = torch.softmax(outputs_g, dim=1)[one_hot.bool()]
+        correct = (probs_g >= gamma) * torch.bernoulli(p_accept).bool().to(device)
 
     if probs_g.nelement() == 0:
         max_prob = 0.0
@@ -294,8 +385,6 @@ def generation(
     else:
         max_prob = probs_g.max().item()
         mean_prob = probs_g.mean().item()
-
-    correct = (probs_g >= gamma) * torch.bernoulli(p_accept).bool().to(device)
 
     model_r.train()
 
@@ -341,6 +430,7 @@ def train(
     perturb_eps=0.5,
     step_attack="inf",
     multi_label=False,
+    max_n_labels=5,
 ):
     global_step, best = 0, 0.0
 
@@ -367,13 +457,16 @@ def train(
     max_prob, mean_prob = 0, 0
 
     if multi_label:
-        inv_w = get_inv_propensity(
-            sp.vstack([train_loader.dataset.y, valid_loader.dataset.y])
-        )
+        y = sp.vstack([train_loader.dataset.y, valid_loader.dataset.y])
+        inv_w = get_inv_propensity(y)
         mlb = get_mlb(train_loader.dataset.le_path)
+        adj = y.T @ y
+        adj.setdiag(0)
+        adj.eliminate_zeros()
     else:
         inv_w = None
         mlb = None
+        adj = None
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -434,6 +527,9 @@ def train(
                     perturb_attack=perturb_attack,
                     perturb_eps=perturb_eps,
                     step_attack=step_attack,
+                    multi_label=multi_label,
+                    adj=adj,
+                    max_n_labels=max_n_labels,
                 )
 
                 num_gen_list.append(num_gen)
