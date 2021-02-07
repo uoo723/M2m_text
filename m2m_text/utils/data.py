@@ -9,9 +9,11 @@ from typing import Iterable, Optional, Union
 
 import joblib
 import numpy as np
+import scipy.sparse as sp
 from gensim.models import KeyedVectors
-from scipy.sparse import csr_matrix
-from sklearn.preprocessing import MultiLabelBinarizer
+from scipy.sparse import csc_matrix, csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import MultiLabelBinarizer, normalize
 from torch.utils.data import Dataset
 
 from ..preprocessing import LabelEncoder, build_vocab, tokenize
@@ -83,6 +85,34 @@ def get_tokenized_texts(
         pickle.dump(tokenized_texts, f)
 
     return tokenized_texts
+
+
+def get_sparse_features(
+    path: str,
+    tokenized_texts: Optional[Iterable[Iterable[str]]] = None,
+    max_features: int = 100_000,
+    force: bool = False,
+) -> csr_matrix:
+    if os.path.isfile(path) and not force:
+        return sp.load_npz(path)
+
+    if tokenized_texts is None:
+        raise ValueError("tokenized_texts must be set to generate sparse features")
+
+    sparse_x = TfidfVectorizer(max_features=max_features).fit_transform(
+        map(lambda t: " ".join(t), tokenized_texts)
+    )
+
+    sp.save_npz(path, sparse_x)
+
+    return sparse_x
+
+
+def get_label_features(
+    sparse_x: csr_matrix,
+    sparse_y: csr_matrix,
+) -> csr_matrix:
+    return normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x))
 
 
 def get_emb_init(

@@ -42,6 +42,7 @@ class Dataset(torch.utils.data.Dataset):
         self.root = os.path.expanduser(root)
         self.data_dir = os.path.join(self.root, self.base_folder)
         self.train = train
+        self._split_indices = None
 
     def download(self, quiet: bool = False) -> None:
         """Download archive from url
@@ -81,20 +82,25 @@ class Dataset(torch.utils.data.Dataset):
         train_dataset = cls(*args, **kwargs)
         valid_dataset = cls(*args, **kwargs)
 
+        split_indices = np.arange(train_dataset.y.shape[0])
+
         if type(train_dataset.x) == tuple:
             input_len = len(train_dataset.x)
             data = train_test_split(
                 *train_dataset.x,
                 train_dataset.y,
                 train_dataset.raw_y,
+                split_indices,
                 test_size=test_size
             )
             train_dataset.x = tuple(data[i * 2] for i in range(input_len))
             valid_dataset.x = tuple(data[i * 2 + 1] for i in range(input_len))
-            train_dataset.y = data[-4]
-            valid_dataset.y = data[-3]
-            train_dataset.raw_y = data[-2]
-            valid_dataset.raw_y = data[-1]
+            train_dataset.y = data[-6]
+            valid_dataset.y = data[-5]
+            train_dataset.raw_y = data[-4]
+            valid_dataset.raw_y = data[-3]
+            train_dataset._split_indices = data[-2]
+            valid_dataset._split_indices = data[-1]
         else:
             (
                 train_x,
@@ -103,10 +109,13 @@ class Dataset(torch.utils.data.Dataset):
                 valid_y,
                 train_raw_y,
                 valid_raw_y,
+                train_split_indices,
+                valid_split_indices,
             ) = train_test_split(
                 train_dataset.x,
                 train_dataset.y,
                 train_dataset.raw_y,
+                split_indices,
                 test_size=test_size,
             )
 
@@ -116,6 +125,8 @@ class Dataset(torch.utils.data.Dataset):
             valid_dataset.y = valid_y
             train_dataset.raw_y = train_raw_y
             valid_dataset.raw_y = valid_raw_y
+            train_dataset._split_indices = train_split_indices
+            valid_dataset._split_indices = valid_split_indices
 
         return train_dataset, valid_dataset
 
@@ -133,3 +144,7 @@ class Dataset(torch.utils.data.Dataset):
     def raw_y(self) -> TDataY:
         """Raw output (not encoded)"""
         raise NotImplemented
+
+    @property
+    def split_indices(self) -> np.ndarray:
+        return self._split_indices

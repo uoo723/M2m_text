@@ -10,12 +10,20 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from scipy.sparse import csr_matrix
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from ..preprocessing import truncate_text
 from ..utils import download_from_url, extract_archive
-from ..utils.data import get_emb_init, get_le, get_mlb, get_tokenized_texts, get_vocab
+from ..utils.data import (
+    get_emb_init,
+    get_le,
+    get_mlb,
+    get_sparse_features,
+    get_tokenized_texts,
+    get_vocab,
+)
 from ._base import Dataset, TDataX, TDataXTensor, TDataY, TDataYTensor
 
 
@@ -61,6 +69,9 @@ class TextDataset(Dataset):
         self.vocab_path = os.path.join(self.data_dir, vocab_filename)
         self.tokenized_path = os.path.join(
             self.data_dir, ("train_" if self.train else "test_") + tokenized_filename
+        )
+        self.sparse_path = os.path.join(
+            self.data_dir, ("train_" if self.train else "test_") + "sparse.npz"
         )
         self.le_path = os.path.join(self.data_dir, label_encoder_filename)
         self.w2v_model_path = os.path.join(self.root, self.w2v_model)
@@ -134,7 +145,7 @@ class TextDataset(Dataset):
 
             input_ids = []
             attention_mask = []
-            for text in tqdm(texts, desc="Tokenized..."):
+            for text in tqdm(texts, desc="Tokenizing"):
                 inputs = tokenizer(
                     text,
                     truncation=True,
@@ -202,6 +213,25 @@ class TextDataset(Dataset):
         )
 
         return texts, labels
+
+    def get_sparse_features(
+        self, max_features: int = 100_000, force: bool = False
+    ) -> csr_matrix:
+        """Return sparse (tf-idf) features."""
+        if not os.path.isfile(self.sparse_path):
+            texts = None if os.path.isfile(self.tokenized_path) else self.raw_data()[0]
+            tokenized_texts = get_tokenized_texts(self.tokenized_path, texts)
+        else:
+            tokenized_texts = None
+
+        sparse_x = get_sparse_features(
+            self.sparse_path, tokenized_texts, max_features=max_features, force=force
+        )
+
+        if self.split_indices is not None:
+            sparse_x = sparse_x[self.split_indices]
+
+        return sparse_x
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Retrun raw data for preprocessing"""
