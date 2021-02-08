@@ -249,6 +249,12 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default=5,
     help="Maximum number of labels to be generated for multi-label dataset",
 )
+@click.option(
+    "--sim-threshold",
+    type=click.FLOAT,
+    default=0.7,
+    help="Similarity threshold to select adjacent labels for multi-label datasets",
+)
 def main(
     mode,
     test_run,
@@ -287,6 +293,7 @@ def main(
     perturb_eps,
     step_attack,
     max_n_labels,
+    sim_threshold,
 ):
     yaml = YAML(typ="safe")
     model_cnf = yaml.load(Path(model_cnf))
@@ -479,6 +486,7 @@ def main(
             step_attack=step_attack,
             multi_label=multi_label,
             max_n_labels=max_n_labels,
+            sim_threshold=sim_threshold,
             **model_cnf.get("train", {}),
         )
     ##################################################################################

@@ -18,7 +18,7 @@ from tqdm.auto import tqdm
 
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
-from .utils.data import get_mlb
+from .utils.data import get_label_features, get_mlb
 from .utils.model import save_checkpoint
 from .utils.train import (
     clip_gradient,
@@ -91,6 +91,8 @@ def train_gen_step(
     multi_label=False,
     adj=None,
     max_n_labels=5,
+    labels_f=None,
+    sim_threshold=0.7,
 ):
     model.train()
     model_seed.eval()
@@ -150,29 +152,59 @@ def train_gen_step(
 
             row_index = (gen_rows[gen_index] == i).nonzero(as_tuple=True)[0]
             candidate_labels = gen_cols[gen_index][row_index]
-            n_candidate_labels = candidate_labels.shape[0]
+
+            similarities = np.mean(
+                (
+                    labels_f[orig_labels.cpu()] @ labels_f[candidate_labels.cpu()].T
+                ).toarray(),
+                axis=0,
+            )
+
+            sim_index = similarities >= sim_threshold
+            sim_mask = (
+                (orig_labels.unsqueeze(1).cpu() != candidate_labels[sim_index])
+                .prod(dim=0)
+                .bool()
+            )
+            n_candidate_labels = sim_mask.sum().item()
+
             n_gen_labels = min(max_n_labels - n_labels, n_candidate_labels)
 
             if n_gen_labels == 0:
                 continue
 
-            random_index = torch.randint(n_candidate_labels, (n_gen_labels,))
-            gen_labels = candidate_labels[random_index].to(device)
+            bs = n_samples_per_class[cols[target_index[i]]]
+            gs = n_samples_per_class[candidate_labels[sim_index][sim_mask]]
+
+            delta = F.relu(bs - gs)
+            p_accept = 1 - beta ** delta
+
+            if p_accept.sum(-1) <= 0:
+                continue
+
+            idx = torch.multinomial(p_accept, n_gen_labels)
+
+            gen_labels = candidate_labels[sim_index][sim_mask][idx].to(device)
             new_labels = torch.cat([orig_labels, gen_labels])
             data_y[rows[target_index[i]]][new_labels] = 1.0
 
             select_idx.append(rows[target_index[i]])
             gen_labels_list.append(gen_labels)
 
-        select_idx = torch.hstack(select_idx)
+        if select_idx:
+            select_idx = torch.hstack(select_idx)
 
         gen_targets = data_y[select_idx]
 
-        gen_target_rows = torch.hstack(
-            [torch.tensor([i] * len(t)) for i, t in enumerate(gen_labels_list)]
+        gen_target_rows = (
+            torch.hstack(
+                [torch.tensor([i] * len(t)) for i, t in enumerate(gen_labels_list)]
+            )
+            if gen_labels_list
+            else []
         )
 
-        gen_target_cols = torch.hstack(gen_labels_list)
+        gen_target_cols = torch.hstack(gen_labels_list) if gen_labels_list else []
 
     else:
         if imb_type is not None:
@@ -301,13 +333,16 @@ def generation(
     gen_target_rows=None,
     gen_target_cols=None,
 ):
-    model_g.eval()
-    model_r.eval()
-
     if type(inputs) == tuple:
         inputs, other_inputs = inputs[0], inputs[1:]
     else:
         other_inputs = None
+
+    if inputs.nelement() == 0:
+        return inputs, torch.tensor([]), 0.0, 0.0
+
+    model_g.eval()
+    model_r.eval()
 
     input_dim = len(inputs.shape) - 1
     input_gen_size = torch.Size([-1] + [1] * input_dim)
@@ -431,6 +466,7 @@ def train(
     step_attack="inf",
     multi_label=False,
     max_n_labels=5,
+    sim_threshold=0.7,
 ):
     global_step, best = 0, 0.0
 
@@ -463,10 +499,25 @@ def train(
         adj = y.T @ y
         adj.setdiag(0)
         adj.eliminate_zeros()
+
+        labels_f = (
+            get_label_features(
+                sp.vstack(
+                    [
+                        train_loader.dataset.get_sparse_features(),
+                        valid_loader.dataset.get_sparse_features(),
+                    ]
+                ),
+                y,
+            )
+            if gen
+            else None
+        )
     else:
         inv_w = None
         mlb = None
         adj = None
+        labels_f = None
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -530,6 +581,8 @@ def train(
                     multi_label=multi_label,
                     adj=adj,
                     max_n_labels=max_n_labels,
+                    labels_f=labels_f,
+                    sim_threshold=sim_threshold,
                 )
 
                 num_gen_list.append(num_gen)
