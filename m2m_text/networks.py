@@ -80,7 +80,6 @@ class AttentionRNN(Network):
 
         if not pass_emb and not pass_hidden:
             emb_out, lengths, masks = self.emb(inputs, **kwargs)
-            emb_out = self.batch_m(emb_out)
         elif not pass_hidden:
             emb_out, lengths, masks = inputs
         else:
@@ -91,6 +90,8 @@ class AttentionRNN(Network):
 
         if emb_out is not None:
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+
+        emb_out = self.batch_m(emb_out)
 
         if not pass_hidden:
             rnn_out = self.lstm(
@@ -246,12 +247,13 @@ class RobertaForSeqClassification(RobertaPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-            sequence_output = self.batch_m(outputs[0])
-        else:
-            sequence_output = outputs[0]
+
+        sequence_output = outputs[0]
 
         if return_emb:
             return (sequence_output, *outputs[1:])
+
+        sequence_output = self.batch_m(sequence_output)
 
         logits = self.classifier(sequence_output)
 
@@ -341,13 +343,14 @@ class LaRoberta(RobertaPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-            sequence_output = self.batch_m(outputs[0])
+            sequence_output = outputs[0]
         else:
             sequence_output, attention_mask = outputs[0], outputs[1]
 
         if return_emb:
             return (sequence_output, *outputs[1:])
 
+        sequence_output = self.batch_m(sequence_output)
         # if return_emb:
         #     return (self.get_input_embeddings()(input_ids),)
 
