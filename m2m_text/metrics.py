@@ -131,3 +131,28 @@ get_psp_1 = partial(get_psp, top=1)
 get_psp_3 = partial(get_psp, top=3)
 get_psp_5 = partial(get_psp, top=5)
 get_psp_10 = partial(get_psp, top=10)
+
+
+def get_psndcg(
+    prediction: TPredict, targets: TTarget, inv_w: np.ndarray, mlb: TMlb = None, top=5
+) -> float:
+    if mlb is None:
+        mlb = MultiLabelBinarizer(sparse_output=True).fit(targets)
+    log = 1.0 / np.log2(np.arange(top) + 2)
+    psdcg = 0.0
+    if not isinstance(targets, csr_matrix):
+        targets = mlb.transform(targets)
+    for i in range(top):
+        p = mlb.transform(prediction[:, i : i + 1]).multiply(inv_w)
+        psdcg += p.multiply(targets).sum() * log[i]
+    t, den = csr_matrix(targets.multiply(inv_w)), 0.0
+    for i in range(t.shape[0]):
+        num = min(top, len(t.getrow(i).data))
+        den += -np.sum(np.sort(-t.getrow(i).data)[:num] * log[:num])
+    return psdcg / den
+
+
+get_psndcg_1 = partial(get_psndcg, top=1)
+get_psndcg_3 = partial(get_psndcg, top=3)
+get_psndcg_5 = partial(get_psndcg, top=5)
+get_psndcg_10 = partial(get_psndcg, top=10)
