@@ -239,7 +239,7 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 )
 @click.option(
     "--step-attack",
-    type=click.Choice(["l2", "inf"]),
+    type=click.Choice(["l2", "inf", "none"]),
     default="inf",
     help="Attack type for step phase",
 )
