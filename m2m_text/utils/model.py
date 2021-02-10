@@ -3,7 +3,7 @@ Created on 2021/01/07
 @author Sangwoo Han
 """
 import random
-from typing import Union, Optional
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -11,10 +11,12 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
+TModel = Union[nn.DataParallel, nn.Module]
+
 
 def save_checkpoint(
     ckpt_path: str,
-    model: Union[nn.DataParallel, nn.Module],
+    model: TModel,
     optim: Optimizer,
     results: dict,
     epoch: int,
@@ -39,7 +41,7 @@ def save_checkpoint(
 
 def load_checkpoint(
     ckpt_path: str,
-    model: Optional[Union[nn.DataParallel, nn.Module]] = None,
+    model: Optional[TModel] = None,
     optim: Optional[Optimizer] = None,
     scheduler: Optional[_LRScheduler] = None,
     set_rng_state: bool = True,
@@ -48,19 +50,19 @@ def load_checkpoint(
 ) -> int:
     ckpt = torch.load(ckpt_path, **torch_load_args)
 
-    if model is not None and 'net' in ckpt:
+    if model is not None and "net" in ckpt:
         if isinstance(model, nn.DataParallel):
             model = model.module
 
         model.load_state_dict(ckpt["net"])
 
-    if optim and 'optimizer' in ckpt:
+    if optim and "optimizer" in ckpt:
         optim.load_state_dict(ckpt["optimizer"])
 
     if scheduler and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
 
-    if set_rng_state and 'rng_state' in ckpt:
+    if set_rng_state and "rng_state" in ckpt:
         torch.set_rng_state(ckpt["rng_state"][0])
         np.random.set_state(ckpt["rng_state"][1])
         random.setstate(ckpt["rng_state"][2])
@@ -72,3 +74,31 @@ def load_checkpoint(
         ret = ckpt["epoch"]
 
     return ret
+
+
+def get_model_outputs(
+    model: TModel,
+    inputs: Union[torch.Tensor, Tuple[torch.Tensor]],
+    other_inputs: Optional[Tuple[torch.Tensor]] = (),
+    input_opts: Optional[Dict] = {},
+    is_transformer: bool = False,
+):
+    if is_transformer:
+        if type(inputs) == tuple:
+            model_inputs = {"input_ids": inputs[0], "attention_mask": inputs[1]}
+        else:
+            model_inputs = {"outputs": (inputs, *other_inputs)}
+    else:
+        if other_inputs:
+            model_inputs = (inputs, *other_inputs)
+        else:
+            model_inputs = inputs
+
+    if is_transformer:
+        outputs = model(**model_inputs, **input_opts)[0]
+        if type(inputs) == tuple:
+            outputs = (outputs, inputs[1])
+    else:
+        outputs = model(model_inputs, **input_opts)
+
+    return outputs

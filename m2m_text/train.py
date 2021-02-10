@@ -19,7 +19,7 @@ from tqdm.auto import tqdm
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_label_features, get_mlb
-from .utils.model import save_checkpoint
+from .utils.model import get_model_outputs, save_checkpoint
 from .utils.train import (
     clip_gradient,
     make_step,
@@ -98,21 +98,15 @@ def train_gen_step(
     model_seed.eval()
     batch_size = data_y.size(0)
 
-    if is_transformer:
-        inputs = {
-            "input_ids": data_x[0],
-            "attention_mask": data_x[1],
-        }
-        orig_inputs = model_seed(**inputs, return_emb=True, return_dict=False)[0]
-        other_inputs = (data_x[1],)
-    elif input_opts:
+    if input_opts:
         with torch.no_grad():
-            orig_inputs = model_seed(data_x, **input_opts) if input_opts else data_x
-            if type(orig_inputs) == tuple:
-                orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
-            else:
-                other_inputs = None
-            inputs = orig_inputs.clone()
+            orig_inputs = get_model_outputs(
+                model_seed, data_x, input_opts=input_opts, is_transformer=is_transformer
+            )
+        if type(orig_inputs) == tuple:
+            orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
+        else:
+            other_inputs = None
     else:
         orig_inputs = data_x
         other_inputs = None
@@ -142,6 +136,7 @@ def train_gen_step(
         # Append minor classes in target samples
         select_idx = []
         gen_labels_list = []
+        orig_labels_list = []
 
         for i in range(target_index.shape[0]):
             orig_labels = data_y[rows[target_index[i]]].nonzero(as_tuple=True)[0]
@@ -190,11 +185,32 @@ def train_gen_step(
 
             select_idx.append(rows[target_index[i]])
             gen_labels_list.append(gen_labels)
+            orig_labels_list.append(orig_labels)
 
         if select_idx:
             select_idx = torch.hstack(select_idx)
+            orig_labels_rows = torch.hstack(
+                [torch.tensor([i] * len(t)) for i, t in enumerate(orig_labels_list)]
+            )
+            orig_labels_cols = torch.hstack(orig_labels_list)
+            orig_idx = (orig_labels_rows, orig_labels_cols)
+        else:
+            orig_idx = None
 
         gen_targets = data_y[select_idx]
+
+        if orig_idx:
+            with torch.no_grad():
+                scores = torch.sigmoid(
+                    get_model_outputs(
+                        model_seed,
+                        inputs,
+                        other_inputs,
+                        last_input_opts,
+                        is_transformer,
+                    )
+                )
+            gen_targets[orig_idx] = scores[orig_idx]
 
         gen_target_rows = (
             torch.hstack(
@@ -240,7 +256,7 @@ def train_gen_step(
 
     seed_targets = targets[select_idx]
 
-    gen_inputs, correct_mask, max_prob, mean_prob = generation(
+    gen_inputs, probs, correct_mask, max_prob, mean_prob = generation(
         model,
         model_seed,
         is_transformer,
@@ -278,7 +294,7 @@ def train_gen_step(
             gen_targets[(gen_target_rows, gen_target_cols)] = 0.0
             gen_targets[
                 (gen_target_rows[correct_mask], gen_target_cols[correct_mask])
-            ] = 1.0
+            ] = probs[correct_mask]
             targets[gen_c_idx] = gen_targets[gen_target_rows[correct_mask].unique()]
         else:
             gen_c_idx = gen_index[correct_mask]
@@ -288,17 +304,9 @@ def train_gen_step(
             inputs[gen_c_idx] = gen_inputs_c
             targets[gen_c_idx] = gen_targets_c
 
-    if other_inputs:
-        model_inputs = (inputs, *other_inputs)
-    elif is_transformer:
-        model_inputs = (inputs,)
-    else:
-        model_inputs = inputs
-
-    if is_transformer:
-        outputs = model(outputs=model_inputs, pass_emb=True, return_dict=False)[0]
-    else:
-        outputs = model(model_inputs, **last_input_opts)
+    outputs = get_model_outputs(
+        model, inputs, other_inputs, last_input_opts, is_transformer
+    )
     loss = criterion(outputs, targets)
 
     optimizer.zero_grad()
@@ -356,28 +364,12 @@ def generation(
 
     for _ in range(max_iter):
         inputs = inputs.clone().detach().requires_grad_(True)
-
-        if other_inputs:
-            model_inputs = (inputs, *other_inputs)
-        elif is_transformer:
-            model_inputs = (inputs,)
-        else:
-            model_inputs = inputs
-
-        if is_transformer:
-            outputs_g = model_g(
-                outputs=model_inputs,
-                pass_emb=True,
-                return_dict=False,
-            )[0]
-            outputs_r = model_r(
-                outputs=model_inputs,
-                pass_emb=True,
-                return_dict=False,
-            )[0]
-        else:
-            outputs_g = model_g(model_inputs, **gen_input_opts)
-            outputs_r = model_r(model_inputs, **gen_input_opts)
+        outputs_g = get_model_outputs(
+            model_g, inputs, other_inputs, gen_input_opts, is_transformer
+        )
+        outputs_r = get_model_outputs(
+            model_r, inputs, other_inputs, gen_input_opts, is_transformer
+        )
 
         loss = criterion(outputs_g, targets) + lam * classwise_loss(
             outputs_r, seed_targets, multi_label
@@ -423,7 +415,7 @@ def generation(
 
     model_r.train()
 
-    return inputs, correct, max_prob, mean_prob
+    return inputs, probs_g, correct, max_prob, mean_prob
 
 
 def train(

@@ -4,3 +4,14 @@ model:
   pretrained: roberta-base
   freeze_encoder: true
   max_length: 200
+
+train:
+  input_opts:
+    return_emb: true
+    return_dict: false
+  gen_input_opts:
+    pass_emb: true
+    return_dict: false
+  last_input_opts:
+    pass_emb: true
+    return_dict: false
