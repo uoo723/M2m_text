@@ -76,15 +76,25 @@ def load_checkpoint(
     return ret
 
 
+def copy_model_parameters(from_model: TModel, to_model: TModel) -> None:
+    if isinstance(from_model, nn.DataParallel):
+        from_model = from_model.module
+
+    if isinstance(to_model, nn.DataParallel):
+        to_model = to_model.module
+
+    to_model.load_state_dict(from_model.state_dict())
+
+
 def get_model_outputs(
     model: TModel,
     inputs: Union[torch.Tensor, Tuple[torch.Tensor]],
     other_inputs: Optional[Tuple[torch.Tensor]] = (),
     input_opts: Optional[Dict] = {},
     is_transformer: bool = False,
-):
+) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
     if is_transformer:
-        if type(inputs) == tuple:
+        if isinstance(inputs, (list, tuple)):
             model_inputs = {"input_ids": inputs[0], "attention_mask": inputs[1]}
         else:
             model_inputs = {"outputs": (inputs, *other_inputs)}

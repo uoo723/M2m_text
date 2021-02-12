@@ -19,7 +19,7 @@ from tqdm.auto import tqdm
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_label_features, get_mlb
-from .utils.model import get_model_outputs, save_checkpoint
+from .utils.model import copy_model_parameters, get_model_outputs, save_checkpoint
 from .utils.train import (
     clip_gradient,
     make_step,
@@ -535,8 +535,10 @@ def train(
 
         # adjust_learning_rate(optimizer, lr_init, epoch)
         for i, (batch_x, batch_y) in enumerate(dataloader, 1):
-            if type(batch_x) == tuple:
+            if isinstance(batch_x, (list, tuple)):
                 batch_x = tuple(batch.to(device) for batch in batch_x)
+            else:
+                batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
 
             global_step += 1
@@ -579,9 +581,9 @@ def train(
 
                 num_gen_list.append(num_gen)
 
-                if num_gen == 0:
+                if np.mean(num_gen_list) < 1.0 and global_step % step == 0:
                     logger.warn(
-                        f"There is no generation. "
+                        f"Number of generation is so small. "
                         f"max prob: {round(max_prob, 4)} "
                         f"mean prob: {round(mean_prob, 4)}"
                     )
@@ -648,6 +650,9 @@ def train(
                         other_states=other_states,
                     )
                     best, e = results[early_criterion], 0
+
+                    # if epoch >= warm and gen:
+                    #     copy_model_parameters(model, model_seed)
                 else:
                     e += 1
                     if early is not None and e > early:

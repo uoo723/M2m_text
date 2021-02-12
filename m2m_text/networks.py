@@ -382,7 +382,7 @@ class LaRoberta(RobertaPreTrainedModel):
         #     sequence_output = self.batch_m(outputs[0])
 
         attn_out = self.attention(
-            sequence_output[:, 1:, :], attention_mask[:, 1:].bool()
+            sequence_output, attention_mask.bool()
         )  # N, labels_num, hidden_size
 
         logits = self.linear(attn_out)

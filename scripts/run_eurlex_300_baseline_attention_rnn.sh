@@ -11,7 +11,7 @@ args=(
     --ckpt-name baseline
     --no-over
     --early-criterion 'p5'
-    --seed 0
+    --seed 2
     --swa-warmup -1
     --eval-step 50
 )
