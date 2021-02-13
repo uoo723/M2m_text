@@ -226,8 +226,14 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     help="Early stopping criterion",
 )
 @click.option(
+    "--no-random-start",
+    is_flag=True,
+    default=False,
+    help="Disable random start for M2m",
+)
+@click.option(
     "--perturb-attack",
-    type=click.Choice(["l2", "inf"]),
+    type=click.Choice(["l2", "inf", "none"]),
     default="l2",
     help="Attack type for random perturbation",
 )
@@ -239,7 +245,7 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 )
 @click.option(
     "--step-attack",
-    type=click.Choice(["l2", "inf", "none"]),
+    type=click.Choice(["l2", "inf"]),
     default="inf",
     help="Attack type for step phase",
 )
@@ -289,6 +295,7 @@ def main(
     eval_step,
     early,
     early_criterion,
+    no_random_start,
     perturb_attack,
     perturb_eps,
     step_attack,
@@ -475,7 +482,7 @@ def main(
             attack_iter,
             other_states=other_states,
             gamma=gamma,
-            random_start=True,
+            random_start=not no_random_start,
             model_seed=network_g,
             step=eval_step,
             early=early,
