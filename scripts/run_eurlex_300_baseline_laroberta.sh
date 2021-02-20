@@ -9,7 +9,7 @@ args=(
     --eta-min 1e-5
     --train-batch-size 100
     --test-batch-size 500
-    --ckpt-name baseline_v4
+    --ckpt-name baseline_v5
     --no-over
     --early-criterion 'p5'
     --seed $1

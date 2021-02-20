@@ -19,6 +19,7 @@ from tqdm.auto import tqdm
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_label_features, get_mlb
+from .utils.mixup import MixUp
 from .utils.model import copy_model_parameters, get_model_outputs, save_checkpoint
 from .utils.train import (
     clip_gradient,
@@ -40,7 +41,7 @@ def train_step(
     data_y,
     gradient_norm_queue,
     gradient_max_norm,
-):
+) -> float:
     model.train()
 
     if is_transformer:
@@ -60,6 +61,124 @@ def train_step(
     optimizer.step()
 
     return loss.item()
+
+
+def train_mixup_step(
+    model,
+    is_transformer,
+    criterion,
+    optimizer,
+    data_x,
+    data_y,
+    mixup_fn,
+    gradient_norm_queue,
+    gradient_max_norm,
+    n_samples_per_class,
+    gamma,
+    lam,
+    step_size,
+    random_start=True,
+    attack_iter=10,
+    input_opts={},
+    gen_input_opts={},
+    last_input_opts={},
+    perturb_attack="l2",
+    perturb_eps=0.5,
+    step_attack="inf",
+    multi_label=False,
+) -> float:
+    model.train()
+
+    if input_opts:
+        orig_inputs = get_model_outputs(
+            model, data_x, input_opts=input_opts, is_transformer=is_transformer
+        )
+        if type(orig_inputs) == tuple:
+            orig_inputs, other_inputs = orig_inputs[0], orig_inputs[1:]
+        else:
+            other_inputs = None
+    else:
+        orig_inputs = data_x
+        other_inputs = None
+
+    mixed_inputs = orig_inputs.clone()
+    mixed_targets = data_y.clone()
+
+    mixed_inputs, mixed_targets = mixup_fn(mixed_inputs, mixed_targets)
+
+    # r_targets = data_y.clone()
+
+    # if multi_label:
+    #     rows, cols = r_targets.nonzero(as_tuple=True)
+    #     target_probs = n_samples_per_class[cols] / torch.max(n_samples_per_class)
+    #     target_index = torch.bernoulli(target_probs).nonzero(as_tuple=True)[0]
+    #     r_targets = 0.0
+    #     r_targets[(rows[target_index], cols[target_index])] = 1.0
+    #     # targets[(rows, cols)] = target_probs
+
+    # input_dim = len(inputs.shape) - 1
+    # input_gen_size = torch.Size([-1] + [1] * input_dim)
+
+    # if random_start:
+    #     random_noise = random_perturb(inputs, perturb_attack, perturb_eps)
+    #     inputs = inputs + random_noise
+
+    # for _ in range(attack_iter):
+    #     inputs = inputs.clone().detach().requires_grad_(True)
+    #     outputs = get_model_outputs(
+    #         model, inputs, other_inputs, gen_input_opts, is_transformer
+    #     )
+
+    #     loss = lam * classwise_loss(outputs, r_targets, multi_label)
+    #     (grad,) = torch.autograd.grad(loss, [inputs])
+
+    #     inputs = inputs - make_step(grad, step_attack, step_size, input_gen_size)
+
+    # inputs = inputs.detach()
+
+    # with torch.no_grad():
+    #     outputs = get_model_outputs(
+    #         model, inputs, other_inputs, last_input_opts, is_transformer
+    #     )
+
+    # probs = torch.sigmoid(outputs)[(rows[target_index], cols[target_index])]
+    # correct_mask = probs <= gamma
+
+    # num_targets = rows[target_index][correct_mask].unique().shape[0]
+
+    # if num_targets > 0:
+    #     pass
+
+    mean_n_labels = (mixed_targets > 0).sum(dim=-1).float().mean()
+
+    # outputs = get_model_outputs(
+    #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
+    # )
+    optimizer.zero_grad()
+
+    mixed_outputs = get_model_outputs(
+        model, mixed_inputs, other_inputs, last_input_opts, is_transformer
+    )
+
+    loss1 = criterion(mixed_outputs, mixed_targets)
+    loss1.backward()
+
+    outputs = get_model_outputs(model, data_x, is_transformer=is_transformer)
+
+    if isinstance(outputs, (list, tuple)):
+        outputs = outputs[0]
+
+    loss2 = criterion(outputs, data_y)
+    loss2.backward()
+
+    for param in model.parameters():
+        if param.grad is not None:
+            param.grad /= 2
+
+    clip_gradient(model, gradient_norm_queue, gradient_max_norm)
+    optimizer.step()
+
+    return ((loss1 + loss2) / 2).item(), mean_n_labels.item()
 
 
 def train_gen_step(
@@ -93,7 +212,7 @@ def train_gen_step(
     max_n_labels=5,
     labels_f=None,
     sim_threshold=0.7,
-):
+) -> Tuple[float, int, float, float]:
     model.train()
     model_seed.eval()
     batch_size = data_y.size(0)
@@ -380,22 +499,10 @@ def generation(
 
     inputs = inputs.detach()
 
-    if other_inputs:
-        model_inputs = (inputs, *other_inputs)
-    elif is_transformer:
-        model_inputs = (inputs,)
-    else:
-        model_inputs = inputs
-
     with torch.no_grad():
-        if is_transformer:
-            outputs_g = model_g(
-                outputs=model_inputs,
-                pass_emb=True,
-                return_dict=False,
-            )[0]
-        else:
-            outputs_g = model_g(model_inputs, **last_input_opts)
+        outputs_g = get_model_outputs(
+            model_g, inputs, other_inputs, last_input_opts, is_transformer
+        )
 
     if multi_label:
         probs_g = torch.sigmoid(outputs_g)[(gen_target_rows, gen_target_cols)]
@@ -459,6 +566,8 @@ def train(
     multi_label=False,
     max_n_labels=5,
     sim_threshold=0.7,
+    mixup_enabled=False,
+    mixup_alpha=0.4,
 ):
     global_step, best = 0, 0.0
 
@@ -483,6 +592,8 @@ def train(
     last_ckpt_path += "_last" + ext
 
     max_prob, mean_prob = 0, 0
+
+    mean_n_labels_list = deque(maxlen=50)
 
     if multi_label:
         y = sp.vstack([train_loader.dataset.y, valid_loader.dataset.y])
@@ -511,9 +622,28 @@ def train(
         adj = None
         labels_f = None
 
+    if mixup_enabled:
+        mixup_fn = MixUp(mixup_alpha)
+    else:
+        mixup_fn = None
+
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
             swa_init(model, swa_state)
+
+        if epoch == warm and mixup_enabled:
+            logger.info("Start mixup")
+            mixup_ckpt_path, ext = os.path.splitext(ckpt_path)
+            mixup_ckpt_path += "_before_Mixup" + ext
+            save_checkpoint(
+                mixup_ckpt_path,
+                model,
+                optimizer,
+                results,
+                epoch,
+                scheduler=scheduler,
+                other_states=other_states,
+            )
 
         if epoch == warm and gen:
             m2m_ckpt_path, ext = os.path.splitext(ckpt_path)
@@ -542,7 +672,35 @@ def train(
             batch_y = batch_y.to(device)
 
             global_step += 1
-            if epoch >= warm and gen:
+            if epoch >= warm and mixup_enabled:
+                loss, mean_n_labels = train_mixup_step(
+                    model,
+                    is_transformer,
+                    criterion,
+                    optimizer,
+                    batch_x,
+                    batch_y,
+                    mixup_fn,
+                    gradient_norm_queue,
+                    gradient_max_norm,
+                    n_samples_per_class_tensor,
+                    gamma,
+                    lam,
+                    step_size,
+                    random_start=random_start,
+                    attack_iter=attack_iter,
+                    input_opts=input_opts,
+                    gen_input_opts=gen_input_opts,
+                    last_input_opts=last_input_opts,
+                    perturb_attack=perturb_attack,
+                    perturb_eps=perturb_eps,
+                    step_attack=step_attack,
+                    multi_label=multi_label,
+                )
+
+                mean_n_labels_list.append(mean_n_labels)
+
+            elif epoch >= warm and gen:
                 # if epoch == warm and hasattr(model, "init_linear"):
                 #     model.init_linear()
 
@@ -602,6 +760,11 @@ def train(
                 # print(train_inputs[0].dtype)
                 swa_step(model, swa_state)
                 swap_swa_params(model, swa_state)
+
+                if mixup_enabled and len(mean_n_labels_list) > 0:
+                    mixup_log_msg = f" avg labels: {np.mean(mean_n_labels_list):.2f}"
+                else:
+                    mixup_log_msg = ""
 
                 if multi_label:
                     labels = np.concatenate(
@@ -690,6 +853,7 @@ def train(
                     log_msg += f"bal acc: {round(results['bal_acc'], 4)}"
 
                 log_msg += gen_log_msg
+                log_msg += mixup_log_msg
 
                 logger.info(log_msg)
 

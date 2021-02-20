@@ -5,9 +5,11 @@ Created on 2020/12/31
 @author Sangwoo Han
 """
 
+from itertools import combinations
 from typing import List, Optional
 
 import torch
+from torch._C import Value
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.configuration_utils import PretrainedConfig
@@ -30,7 +32,7 @@ class Network(nn.Module):
         emb_trainable: bool = True,
         padding_idx: int = 0,
         emb_dropout: float = 0.2,
-        **kwargs
+        **kwargs,
     ):
         super(Network, self).__init__()
         self.emb = Embedding(
@@ -51,10 +53,11 @@ class AttentionRNN(Network):
         linear_size: List[int],
         dropout: float,
         max_length: int,
-        **kwargs
+        **kwargs,
     ):
         super(AttentionRNN, self).__init__(emb_size, **kwargs)
         self.batch_m = nn.BatchNorm1d(max_length)
+        self.batch_m2 = nn.BatchNorm1d(num_labels)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
         self.attention = MLAttention(num_labels, hidden_size * 2)
         self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
@@ -66,8 +69,10 @@ class AttentionRNN(Network):
         pass_emb=False,
         return_hidden=False,
         pass_hidden=False,
+        return_attn=False,
+        pass_attn=False,
         rnn_training=False,
-        **kwargs
+        **kwargs,
     ):
         if return_emb and pass_emb:
             raise ValueError("`return_emb` and `pass_emb` both cannot be True")
@@ -75,12 +80,32 @@ class AttentionRNN(Network):
         if return_hidden and pass_hidden:
             raise ValueError("`return_hidden` and `pass_hidden` both cannot be True")
 
-        if return_emb and return_hidden:
-            raise ValueError("`return_emb` and `return_hidden` both cannot be True")
+        if return_attn and pass_attn:
+            raise ValueError("`return_attn` and `pass_attn` both cannot be True")
 
-        if not pass_emb and not pass_hidden:
+        return_kwargs = {
+            "return_emb": return_emb,
+            "return_hidden": return_hidden,
+            "return_attn": return_attn,
+        }
+
+        pass_kwargs = {
+            "pass_emb": pass_emb,
+            "pass_hidden": pass_hidden,
+            "pass_attn": pass_attn,
+        }
+
+        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
+            if return_kwargs[kw1] and return_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
+            if pass_kwargs[kw1] and pass_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        if not pass_emb and not pass_hidden and not pass_attn:
             emb_out, lengths, masks = self.emb(inputs, **kwargs)
-        elif not pass_hidden:
+        elif pass_emb:
             emb_out, lengths, masks = inputs
         else:
             emb_out, lengths, masks = None, None, None
@@ -90,20 +115,30 @@ class AttentionRNN(Network):
 
         if emb_out is not None:
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+            emb_out = self.batch_m(emb_out)
 
-        emb_out = self.batch_m(emb_out)
-
-        if not pass_hidden:
             rnn_out = self.lstm(
                 emb_out, lengths, training=rnn_training
             )  # N, L, hidden_size * 2
-        else:
+        elif pass_hidden:
             rnn_out, lengths, masks = inputs
+        else:
+            rnn_out, lengths, masks = None, None, None
 
         if return_hidden:
             return rnn_out, lengths, masks
 
-        attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
+        if rnn_out is not None:
+            attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
+        elif pass_attn:
+            attn_out = inputs
+        else:
+            attn_out = None
+
+        if return_attn:
+            return (attn_out,)
+
+        attn_out = self.batch_m2(attn_out)
 
         return self.linear(attn_out)
 
@@ -293,8 +328,124 @@ class LaRoberta(RobertaPreTrainedModel):
 
         self.roberta = RobertaModel(config, add_pooling_layer=False)
         self.batch_m = nn.BatchNorm1d(config.max_length)
+        self.batch_m2 = nn.BatchNorm1d(config.num_labels)
         self.attention = MLAttention(self.num_labels, config.hidden_size)
         self.linear = MLLinear([config.hidden_size] + linear_size, 1)
+
+        if freeze_encoder:
+            for param in self.base_model.parameters():
+                param.requires_grad = False
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        return_emb=False,
+        pass_emb=False,
+        return_attn=False,
+        pass_attn=False,
+        outputs=None,
+    ):
+        r"""
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
+            config.num_labels - 1]`. If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
+            If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+        """
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
+
+        if return_emb and pass_emb:
+            raise ValueError("`return_hidden` and `pass_hidden` cannot be both true.")
+
+        sequence_output, attn_out = None, None
+
+        if not pass_emb and not pass_attn:
+            outputs = self.roberta(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            sequence_output = outputs[0]
+        elif pass_emb:
+            sequence_output, attention_mask = outputs[0], outputs[1]
+        else:
+            attn_out = outputs[0]
+
+        if return_emb:
+            return (sequence_output, *outputs[1:])
+
+        if sequence_output is not None:
+            sequence_output = self.batch_m(sequence_output)
+
+        if attn_out is None:
+            attn_out = self.attention(
+                sequence_output, attention_mask.bool()
+            )  # N, labels_num, hidden_size
+
+        if return_attn:
+            return (attn_out,)
+
+        attn_out = self.batch_m2(attn_out)
+
+        logits = self.linear(attn_out)
+
+        loss = None
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = nn.MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+class LaRobertaV2(RobertaPreTrainedModel):
+    authorized_missing_keys = [r"position_ids"]
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        linear_size: List[int],
+        freeze_encoder: bool = False,
+    ):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        self.roberta = RobertaModel(config, add_pooling_layer=False)
+        self.batch_m = nn.BatchNorm1d(config.max_length)
+        self.attention = MLAttention(self.num_labels, config.hidden_size)
+        self.linear = MLLinear([config.hidden_size] + linear_size, 1)
+        self.classifier = RobertaClassificationHead(config)
 
         if freeze_encoder:
             for param in self.base_model.parameters():
@@ -351,41 +502,14 @@ class LaRoberta(RobertaPreTrainedModel):
             return (sequence_output, *outputs[1:])
 
         sequence_output = self.batch_m(sequence_output)
-        # if return_emb:
-        #     return (self.get_input_embeddings()(input_ids),)
-
-        # if not pass_emb:
-        #     outputs = self.roberta(
-        #         input_ids,
-        #         attention_mask=attention_mask,
-        #         token_type_ids=token_type_ids,
-        #         position_ids=position_ids,
-        #         head_mask=head_mask,
-        #         inputs_embeds=inputs_embeds,
-        #         output_attentions=output_attentions,
-        #         output_hidden_states=output_hidden_states,
-        #         return_dict=return_dict,
-        #     )
-        #     sequence_output = self.batch_m(outputs[0])
-        # else:
-        #     inputs_embeds, attention_mask = outputs[0], outputs[1]
-        #     outputs = self.roberta(
-        #         attention_mask=attention_mask,
-        #         token_type_ids=token_type_ids,
-        #         position_ids=position_ids,
-        #         head_mask=head_mask,
-        #         inputs_embeds=inputs_embeds,
-        #         output_attentions=output_attentions,
-        #         output_hidden_states=output_hidden_states,
-        #         return_dict=return_dict,
-        #     )
-        #     sequence_output = self.batch_m(outputs[0])
 
         attn_out = self.attention(
-            sequence_output, attention_mask.bool()
+            sequence_output[:, 1:, :], attention_mask[:, 1:].bool()
         )  # N, labels_num, hidden_size
 
-        logits = self.linear(attn_out)
+        logits1 = self.linear(attn_out)
+        logits2 = self.classifier(sequence_output)
+        logits = logits1 + logits2
 
         loss = None
         if labels is not None:

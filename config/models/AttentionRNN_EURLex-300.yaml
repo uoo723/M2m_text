@@ -12,9 +12,9 @@ model:
 
 train:
   input_opts:
-    return_emb: true
+    return_attn: true
   gen_input_opts:
-    pass_emb: true
+    pass_attn: true
     rnn_training: true
   last_input_opts:
-    pass_emb: true
+    pass_attn: true

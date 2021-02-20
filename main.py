@@ -32,6 +32,7 @@ from m2m_text.networks import (
     AttentionRNN,
     FCNet,
     LaRoberta,
+    LaRobertaV2,
     RobertaForSeqClassification,
 )
 from m2m_text.optimizers import DenseSparseAdam
@@ -49,9 +50,10 @@ MODEL_CLS = {
     "FCNet": FCNet,
     "Roberta": RobertaForSeqClassification,
     "LaRoberta": LaRoberta,
+    "LaRobertaV2": LaRobertaV2,
 }
 
-TRANSFORMER_MODELS = ["Roberta", "LaRoberta"]
+TRANSFORMER_MODELS = ["Roberta", "LaRoberta", "LaRobertaV2"]
 
 DATASET_CLS = {
     "DrugReview": DrugReview,
@@ -261,6 +263,15 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default=0.7,
     help="Similarity threshold to select adjacent labels for multi-label datasets",
 )
+@click.option(
+    "--mixup-enabled",
+    is_flag=True,
+    default=False,
+    help="Enable mixup",
+)
+@click.option(
+    "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
+)
 def main(
     mode,
     test_run,
@@ -301,6 +312,8 @@ def main(
     step_attack,
     max_n_labels,
     sim_threshold,
+    mixup_enabled,
+    mixup_alpha,
 ):
     yaml = YAML(typ="safe")
     model_cnf = yaml.load(Path(model_cnf))
@@ -494,6 +507,8 @@ def main(
             multi_label=multi_label,
             max_n_labels=max_n_labels,
             sim_threshold=sim_threshold,
+            mixup_enabled=mixup_enabled,
+            mixup_alpha=mixup_alpha,
             **model_cnf.get("train", {}),
         )
     ##################################################################################

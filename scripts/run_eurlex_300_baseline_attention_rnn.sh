@@ -8,10 +8,10 @@ args=(
     --eta-min 1e-5
     --train-batch-size 100
     --test-batch-size 500
-    --ckpt-name baseline
+    --ckpt-name baseline_v2
     --no-over
     --early-criterion 'p5'
-    --seed 2
+    --seed $1
     --swa-warmup -1
     --eval-step 50
 )

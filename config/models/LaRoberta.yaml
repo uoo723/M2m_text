@@ -8,11 +8,11 @@ model:
 
 train:
   input_opts:
-    return_emb: true
+    return_attn: true
     return_dict: false
   gen_input_opts:
-    pass_emb: true
+    pass_attn: true
     return_dict: false
   last_input_opts:
-    pass_emb: true
+    pass_attn: true
     return_dict: false
