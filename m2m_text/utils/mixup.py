@@ -41,7 +41,7 @@ class MixUp:
             rows, cols = train_y.nonzero(as_tuple=True)
             probs = self.n_samples_per_class[cols] / torch.max(self.n_samples_per_class)
             mask_idx = torch.bernoulli(probs)
-            mask = torch.zeros(train_y.shape)
+            mask = torch.zeros(train_y.shape).to(probs.device)
             mask[rows, cols] = mask_idx
             lamda = torch.where(mask > lamda, mask, lamda)
 
