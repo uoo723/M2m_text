@@ -37,13 +37,28 @@ class MixUp:
         else:
             lamda_x = lamda
 
-        if self.n_samples_per_class is not None:
-            rows, cols = train_y.nonzero(as_tuple=True)
-            probs = self.n_samples_per_class[cols] / torch.max(self.n_samples_per_class)
-            mask_idx = torch.bernoulli(probs)
-            mask = torch.zeros(train_y.shape).to(probs.device)
-            mask[rows, cols] = mask_idx
-            lamda = torch.where(mask > lamda, mask, lamda)
+        # if self.n_samples_per_class is not None:
+        #     rows, cols = train_y.nonzero(as_tuple=True)
+        #     probs = self.n_samples_per_class[cols] / torch.max(self.n_samples_per_class)
+        #     mask_idx = torch.bernoulli(probs)
+        #     mask = torch.zeros(train_y.shape).to(probs.device)
+        #     mask[rows, cols] = mask_idx
+        #     lamda = torch.where(mask > lamda, mask, lamda)
+
+        # lamda_and = 0.8
+        # lamda_xor = 0.8
+        # indices = torch.randperm(train_y.size(0))
+        # lamda = torch.zeros_like(train_y)
+
+        # and_idx = ((train_y + train_y[indices]) == 2).nonzero(as_tuple=True)
+        # or_idx = ((train_y + train_y[indices]) == 0).nonzero(as_tuple=True)
+        # xor_idx1 = ((train_y - train_y[indices]) == -1).nonzero(as_tuple=True)
+        # xor_idx2 = ((train_y - train_y[indices]) == 1).nonzero(as_tuple=True)
+
+        # lamda[and_idx] = lamda_and
+        # lamda[or_idx] = 0.5
+        # lamda[xor_idx1] = 1 - lamda_xor
+        # lamda[xor_idx2] = lamda_xor
 
         mixed_x = mixup(train_x, train_x[indices], lamda_x)
         ret = mixed_x

@@ -154,31 +154,26 @@ def train_mixup_step(
     # outputs = get_model_outputs(
     #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
     # )
-    optimizer.zero_grad()
-
     mixed_outputs = get_model_outputs(
         model, mixed_inputs, other_inputs, last_input_opts, is_transformer
     )
+    # outputs = get_model_outputs(
+    #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
+    # )
 
-    loss1 = criterion(mixed_outputs, mixed_targets)
-    loss1.backward()
+    # loss = criterion(mixed_outputs, mixed_targets) + criterion(
+    #     outputs, data_y
+    # )
+    # loss /= 2
 
-    outputs = get_model_outputs(model, data_x, is_transformer=is_transformer)
+    loss = criterion(mixed_outputs, mixed_targets)
 
-    if isinstance(outputs, (list, tuple)):
-        outputs = outputs[0]
-
-    loss2 = criterion(outputs, data_y)
-    loss2.backward()
-
-    for param in model.parameters():
-        if param.grad is not None:
-            param.grad /= 2
-
+    optimizer.zero_grad()
+    loss.backward()
     clip_gradient(model, gradient_norm_queue, gradient_max_norm)
     optimizer.step()
 
-    return ((loss1 + loss2) / 2).item(), mean_n_labels.item()
+    return loss.item(), mean_n_labels.item()
 
 
 def train_gen_step(

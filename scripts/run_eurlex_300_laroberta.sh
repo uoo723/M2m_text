@@ -10,7 +10,7 @@ args=(
     --eta-min 1e-5
     --train-batch-size 100
     --test-batch-size 500
-    --ckpt-name Mixup_v5_attn
+    --ckpt-name Mixup_v5_base
     --no-over
     --no-over-gen
     --early-criterion 'p5'
