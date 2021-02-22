@@ -212,6 +212,7 @@ def train_gen_step(
     max_n_labels=5,
     labels_f=None,
     sim_threshold=0.7,
+    mixup_fn=None,
 ) -> Tuple[float, int, float, float]:
     model.train()
     model_seed.eval()
@@ -233,13 +234,16 @@ def train_gen_step(
     inputs = orig_inputs.clone()
     targets = data_y.clone()
 
+    if mixup_fn is not None:
+        inputs, targets = mixup_fn(inputs, targets)
+
     p_accept = None
     gen_target_rows = None
     gen_target_cols = None
     target_index = None
     rows = None
 
-    if multi_label:
+    if multi_label and mixup_fn is None:
         # Find samples with major class
         rows, cols = data_y.nonzero(as_tuple=True)
         target_probs = n_samples_per_class[cols] / torch.max(n_samples_per_class)
@@ -341,7 +345,7 @@ def train_gen_step(
 
         gen_target_cols = torch.hstack(gen_labels_list) if gen_labels_list else []
 
-    else:
+    elif not multi_label and mixup_fn is None:
         if imb_type is not None:
             gen_probs = n_samples_per_class[data_y] / torch.max(n_samples_per_class)
             # Generation index
@@ -365,6 +369,10 @@ def train_gen_step(
 
         select_idx = torch.multinomial(p_accept, 1, replacement=True).squeeze()
         p_accept = p_accept.gather(1, select_idx.unsqueeze(-1)).squeeze()
+    elif multi_label and mixup_fn is not None:  # Mixup
+        gen_targets = targets
+        gen_target_rows, gen_target_cols = targets.nonzero(as_tuple=True)
+        select_idx = torch.arange(inputs.shape[0])
 
     if other_inputs:
         seed_inputs = (orig_inputs[select_idx],) + tuple(
@@ -406,15 +414,14 @@ def train_gen_step(
         else sum_t(correct_mask)
     )
 
+    orig_targets = targets.clone()
+
     if num_gen > 0:
         if multi_label:
             gen_c_idx = select_idx[gen_target_rows[correct_mask].unique()]
             inputs[gen_c_idx] = gen_inputs[gen_target_rows[correct_mask].unique()]
-            gen_targets[(gen_target_rows, gen_target_cols)] = 0.0
-            gen_targets[
-                (gen_target_rows[correct_mask], gen_target_cols[correct_mask])
-            ] = probs[correct_mask]
-            targets[gen_c_idx] = gen_targets[gen_target_rows[correct_mask].unique()]
+            # gen_targets[(gen_target_rows, gen_target_cols)][~correct_mask] = 0.0
+            # targets[gen_c_idx] = gen_targets[gen_target_rows[correct_mask].unique()]
         else:
             gen_c_idx = gen_index[correct_mask]
             gen_inputs_c = gen_inputs[correct_mask]
@@ -423,17 +430,31 @@ def train_gen_step(
             inputs[gen_c_idx] = gen_inputs_c
             targets[gen_c_idx] = gen_targets_c
 
+    optimizer.zero_grad()
+
     outputs = get_model_outputs(
         model, inputs, other_inputs, last_input_opts, is_transformer
     )
-    loss = criterion(outputs, targets)
 
-    optimizer.zero_grad()
-    loss.backward()
+    loss1 = criterion(outputs, targets)
+    loss1.backward()
+
+    outputs = get_model_outputs(model, data_x, is_transformer=is_transformer)
+
+    if isinstance(outputs, (list, tuple)):
+        outputs = outputs[0]
+
+    loss2 = criterion(outputs, orig_targets)
+    loss2.backward()
+
+    for param in model.parameters():
+        if param.grad is not None:
+            param.grad /= 2
+
     clip_gradient(model, gradient_norm_queue, gradient_max_norm)
     optimizer.step()
 
-    return loss.item(), num_gen, max_prob, mean_prob
+    return ((loss1 + loss2) / 2).item(), num_gen, max_prob, mean_prob
 
 
 def generation(
@@ -466,7 +487,7 @@ def generation(
         other_inputs = None
 
     if inputs.nelement() == 0:
-        return inputs, torch.tensor([]), 0.0, 0.0
+        return inputs, torch.tensor([]), torch.empty(0), 0.0, 0.0
 
     model_g.eval()
     model_r.eval()
@@ -506,7 +527,8 @@ def generation(
 
     if multi_label:
         probs_g = torch.sigmoid(outputs_g)[(gen_target_rows, gen_target_cols)]
-        correct = probs_g >= gamma
+        select_targets = targets[(gen_target_rows, gen_target_cols)]
+        correct = torch.abs(probs_g - select_targets) <= gamma
     else:
         one_hot = torch.zeros_like(outputs_g)
         one_hot.scatter_(1, targets.view(-1, 1), 1)
@@ -623,7 +645,10 @@ def train(
         labels_f = None
 
     if mixup_enabled:
-        mixup_fn = MixUp(mixup_alpha)
+        if multi_label:
+            mixup_fn = MixUp(mixup_alpha, num_classes, n_samples_per_class_tensor)
+        else:
+            mixup_fn = MixUp(mixup_alpha)
     else:
         mixup_fn = None
 
@@ -631,7 +656,7 @@ def train(
         if epoch == swa_warmup:
             swa_init(model, swa_state)
 
-        if epoch == warm and mixup_enabled:
+        if epoch == warm and mixup_enabled and not gen:
             logger.info("Start mixup")
             mixup_ckpt_path, ext = os.path.splitext(ckpt_path)
             mixup_ckpt_path += "_before_Mixup" + ext
@@ -646,6 +671,10 @@ def train(
             )
 
         if epoch == warm and gen:
+            if mixup_enabled:
+                logger.info("Start M2m with Mixup")
+            else:
+                logger.info("Start M2m")
             m2m_ckpt_path, ext = os.path.splitext(ckpt_path)
             m2m_ckpt_path += "_before_M2m" + ext
             save_checkpoint(
@@ -672,7 +701,7 @@ def train(
             batch_y = batch_y.to(device)
 
             global_step += 1
-            if epoch >= warm and mixup_enabled:
+            if epoch >= warm and mixup_enabled and not gen:
                 loss, mean_n_labels = train_mixup_step(
                     model,
                     is_transformer,
@@ -735,6 +764,7 @@ def train(
                     max_n_labels=max_n_labels,
                     labels_f=labels_f,
                     sim_threshold=sim_threshold,
+                    mixup_fn=mixup_fn,
                 )
 
                 num_gen_list.append(num_gen)
