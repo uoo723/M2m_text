@@ -32,12 +32,12 @@ class MixUp:
 
         indices = torch.randperm(train_x.size(0))
 
-        if self.num_labels and len(train_x.shape) == 3:
+        if self.num_labels is not None and len(train_x.shape) == 3:
             lamda_x = lamda.unsqueeze(-1)
         else:
             lamda_x = lamda
 
-        if self.n_samples_per_class:
+        if self.n_samples_per_class is not None:
             rows, cols = train_y.nonzero(as_tuple=True)
             probs = self.n_samples_per_class[cols] / torch.max(self.n_samples_per_class)
             mask_idx = torch.bernoulli(probs)
