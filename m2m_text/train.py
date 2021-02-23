@@ -19,7 +19,7 @@ from tqdm.auto import tqdm
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_label_features, get_mlb
-from .utils.mixup import MixUp
+from .utils.mixup import MixUp, mixup
 from .utils.model import copy_model_parameters, get_model_outputs, save_checkpoint
 from .utils.train import (
     clip_gradient,
@@ -104,7 +104,42 @@ def train_mixup_step(
     mixed_inputs = orig_inputs.clone()
     mixed_targets = data_y.clone()
 
-    mixed_inputs, mixed_targets = mixup_fn(mixed_inputs, mixed_targets)
+    mixed_inputs1, mixed_targets1 = mixup_fn(mixed_inputs, mixed_targets)
+
+    mixed_outputs1 = get_model_outputs(
+        model, mixed_inputs1, other_inputs, last_input_opts, is_transformer
+    )
+
+    indices = torch.randperm(mixed_inputs.shape[0])
+    lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
+
+    lamda_x = lamda.unsqueeze(-1)
+
+    mixed_inputs2 = mixup(mixed_inputs1, orig_inputs[indices], lamda_x)
+    mixed_targets2 = mixup(mixed_targets1, data_y[indices], lamda)
+
+    mixed_outputs2 = get_model_outputs(
+        model, mixed_inputs2, other_inputs, last_input_opts, is_transformer
+    )
+
+    # indices = torch.randperm(mixed_inputs.shape[0])
+    # lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
+    # lamda_x = lamda.unsqueeze(-1)
+
+    # mixed_inputs = mixup(mixed_inputs, orig_inputs[indices], lamda_x)
+    # mixed_targets = mixup(mixed_targets, data_y[indices], lamda)
+
+    # indices = torch.randperm(mixed_inputs.shape[0])
+    # lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
+    # lamda_x = lamda.unsqueeze(-1)
+
+    # mixed_inputs = mixup(mixed_inputs, orig_inputs[indices], lamda_x)
+    # mixed_targets = mixup(mixed_targets, data_y[indices], lamda)
+
+    # mixed_inputs1, mixed_targets1 = mixup_fn(orig_inputs, data_y)
+    # mixed_inputs2, mixed_targets2 = mixup_fn(orig_inputs, data_y)
+    # mixed_inputs = mixed_inputs1 + mixed_inputs2
+    # mixed_targets = (mixed_targets1 + mixed_targets2).clamp()
 
     # r_targets = data_y.clone()
 
@@ -151,12 +186,12 @@ def train_mixup_step(
 
     mean_n_labels = (mixed_targets > 0).sum(dim=-1).float().mean()
 
-    # outputs = get_model_outputs(
-    #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
-    # )
-    mixed_outputs = get_model_outputs(
-        model, mixed_inputs, other_inputs, last_input_opts, is_transformer
+    outputs = get_model_outputs(
+        model, orig_inputs, other_inputs, last_input_opts, is_transformer
     )
+    # mixed_outputs = get_model_outputs(
+    #     model, mixed_inputs, other_inputs, last_input_opts, is_transformer
+    # )
     # outputs = get_model_outputs(
     #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
     # )
@@ -166,7 +201,11 @@ def train_mixup_step(
     # )
     # loss /= 2
 
-    loss = criterion(mixed_outputs, mixed_targets)
+    # loss = criterion(mixed_outputs, mixed_targets)
+    loss1 = criterion(mixed_outputs1, mixed_targets1)
+    loss2 = criterion(mixed_outputs2, mixed_targets2)
+    loss3 = criterion(outputs, data_y)
+    loss = (loss1 + loss2 + loss3) / 3
 
     optimizer.zero_grad()
     loss.backward()
