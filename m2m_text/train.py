@@ -86,6 +86,7 @@ def train_mixup_step(
     perturb_eps=0.5,
     step_attack="inf",
     multi_label=False,
+    stacked_mixup_enabled=False,
 ) -> float:
     model.train()
 
@@ -104,108 +105,39 @@ def train_mixup_step(
     mixed_inputs = orig_inputs.clone()
     mixed_targets = data_y.clone()
 
-    mixed_inputs1, mixed_targets1 = mixup_fn(mixed_inputs, mixed_targets)
+    mixed_inputs, mixed_targets = mixup_fn(mixed_inputs, mixed_targets)
 
-    mixed_outputs1 = get_model_outputs(
-        model, mixed_inputs1, other_inputs, last_input_opts, is_transformer
+    mixed_outputs = get_model_outputs(
+        model, mixed_inputs, other_inputs, last_input_opts, is_transformer
     )
 
-    indices = torch.randperm(mixed_inputs.shape[0])
-    lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
+    if stacked_mixup_enabled:
+        indices = torch.randperm(mixed_inputs.shape[0])
+        lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
 
-    lamda_x = lamda.unsqueeze(-1)
+        lamda_x = lamda.unsqueeze(-1)
 
-    mixed_inputs2 = mixup(mixed_inputs1, orig_inputs[indices], lamda_x)
-    mixed_targets2 = mixup(mixed_targets1, data_y[indices], lamda)
+        mixed_inputs2 = mixup(mixed_inputs, orig_inputs[indices], lamda_x)
+        mixed_targets2 = mixup(mixed_targets, data_y[indices], lamda)
 
-    mixed_outputs2 = get_model_outputs(
-        model, mixed_inputs2, other_inputs, last_input_opts, is_transformer
-    )
+        mixed_outputs2 = get_model_outputs(
+            model, mixed_inputs2, other_inputs, last_input_opts, is_transformer
+        )
 
-    # indices = torch.randperm(mixed_inputs.shape[0])
-    # lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
-    # lamda_x = lamda.unsqueeze(-1)
+        outputs = get_model_outputs(
+            model, orig_inputs, other_inputs, last_input_opts, is_transformer
+        )
 
-    # mixed_inputs = mixup(mixed_inputs, orig_inputs[indices], lamda_x)
-    # mixed_targets = mixup(mixed_targets, data_y[indices], lamda)
+        loss1 = criterion(mixed_outputs, mixed_targets)
+        loss2 = criterion(mixed_outputs2, mixed_targets2)
+        loss3 = criterion(outputs, data_y)
+        loss = (loss1 + loss2 + loss3) / 3
 
-    # indices = torch.randperm(mixed_inputs.shape[0])
-    # lamda = mixup_fn.m.sample((mixed_targets.shape[1],)).to(mixed_targets.device)
-    # lamda_x = lamda.unsqueeze(-1)
+        mean_n_labels = (mixed_targets2 > 0).sum(dim=-1).float().mean()
+    else:
+        loss = criterion(mixed_outputs, mixed_targets)
 
-    # mixed_inputs = mixup(mixed_inputs, orig_inputs[indices], lamda_x)
-    # mixed_targets = mixup(mixed_targets, data_y[indices], lamda)
-
-    # mixed_inputs1, mixed_targets1 = mixup_fn(orig_inputs, data_y)
-    # mixed_inputs2, mixed_targets2 = mixup_fn(orig_inputs, data_y)
-    # mixed_inputs = mixed_inputs1 + mixed_inputs2
-    # mixed_targets = (mixed_targets1 + mixed_targets2).clamp()
-
-    # r_targets = data_y.clone()
-
-    # if multi_label:
-    #     rows, cols = r_targets.nonzero(as_tuple=True)
-    #     target_probs = n_samples_per_class[cols] / torch.max(n_samples_per_class)
-    #     target_index = torch.bernoulli(target_probs).nonzero(as_tuple=True)[0]
-    #     r_targets = 0.0
-    #     r_targets[(rows[target_index], cols[target_index])] = 1.0
-    #     # targets[(rows, cols)] = target_probs
-
-    # input_dim = len(inputs.shape) - 1
-    # input_gen_size = torch.Size([-1] + [1] * input_dim)
-
-    # if random_start:
-    #     random_noise = random_perturb(inputs, perturb_attack, perturb_eps)
-    #     inputs = inputs + random_noise
-
-    # for _ in range(attack_iter):
-    #     inputs = inputs.clone().detach().requires_grad_(True)
-    #     outputs = get_model_outputs(
-    #         model, inputs, other_inputs, gen_input_opts, is_transformer
-    #     )
-
-    #     loss = lam * classwise_loss(outputs, r_targets, multi_label)
-    #     (grad,) = torch.autograd.grad(loss, [inputs])
-
-    #     inputs = inputs - make_step(grad, step_attack, step_size, input_gen_size)
-
-    # inputs = inputs.detach()
-
-    # with torch.no_grad():
-    #     outputs = get_model_outputs(
-    #         model, inputs, other_inputs, last_input_opts, is_transformer
-    #     )
-
-    # probs = torch.sigmoid(outputs)[(rows[target_index], cols[target_index])]
-    # correct_mask = probs <= gamma
-
-    # num_targets = rows[target_index][correct_mask].unique().shape[0]
-
-    # if num_targets > 0:
-    #     pass
-
-    mean_n_labels = (mixed_targets > 0).sum(dim=-1).float().mean()
-
-    outputs = get_model_outputs(
-        model, orig_inputs, other_inputs, last_input_opts, is_transformer
-    )
-    # mixed_outputs = get_model_outputs(
-    #     model, mixed_inputs, other_inputs, last_input_opts, is_transformer
-    # )
-    # outputs = get_model_outputs(
-    #     model, orig_inputs, other_inputs, last_input_opts, is_transformer
-    # )
-
-    # loss = criterion(mixed_outputs, mixed_targets) + criterion(
-    #     outputs, data_y
-    # )
-    # loss /= 2
-
-    # loss = criterion(mixed_outputs, mixed_targets)
-    loss1 = criterion(mixed_outputs1, mixed_targets1)
-    loss2 = criterion(mixed_outputs2, mixed_targets2)
-    loss3 = criterion(outputs, data_y)
-    loss = (loss1 + loss2 + loss3) / 3
+        mean_n_labels = (mixed_targets > 0).sum(dim=-1).float().mean()
 
     optimizer.zero_grad()
     loss.backward()
@@ -623,6 +555,7 @@ def train(
     max_n_labels=5,
     sim_threshold=0.7,
     mixup_enabled=False,
+    stacked_mixup_enabled=False,
     mixup_alpha=0.4,
 ):
     global_step, best = 0, 0.0
@@ -679,8 +612,8 @@ def train(
         labels_f = None
 
     if mixup_enabled:
-        if multi_label:
-            mixup_fn = MixUp(mixup_alpha, num_classes, n_samples_per_class_tensor)
+        if multi_label and stacked_mixup_enabled:
+            mixup_fn = MixUp(mixup_alpha, num_classes)
         else:
             mixup_fn = MixUp(mixup_alpha)
     else:
@@ -759,6 +692,7 @@ def train(
                     perturb_eps=perturb_eps,
                     step_attack=step_attack,
                     multi_label=multi_label,
+                    stacked_mixup_enabled=stacked_mixup_enabled,
                 )
 
                 mean_n_labels_list.append(mean_n_labels)

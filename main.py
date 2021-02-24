@@ -22,10 +22,12 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from m2m_text.datasets import (
     RCV1,
+    AmazonCat,
     DrugReview,
     DrugReviewSmall,
     DrugReviewSmallv2,
     EURLex,
+    Wiki10,
 )
 from m2m_text.metrics import get_inv_propensity
 from m2m_text.networks import (
@@ -61,9 +63,11 @@ DATASET_CLS = {
     "DrugReviewSmall": DrugReviewSmall,
     "DrugReviewSmallv2": DrugReviewSmallv2,
     "EURLex": EURLex,
+    "AmazonCat": AmazonCat,
+    "Wiki10": Wiki10,
 }
 
-MULTI_LABEL_DATASETS = ["EURLex"]
+MULTI_LABEL_DATASETS = ["EURLex", "AmazonCat", "Wiki10"]
 
 
 def set_logger(log_path: str):
@@ -270,6 +274,12 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     help="Enable mixup",
 )
 @click.option(
+    "--stacked-mixup-enabled",
+    is_flag=True,
+    default=False,
+    help="Enable stacked-mixup",
+)
+@click.option(
     "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
 )
 def main(
@@ -313,6 +323,7 @@ def main(
     max_n_labels,
     sim_threshold,
     mixup_enabled,
+    stacked_mixup_enabled,
     mixup_alpha,
 ):
     yaml = YAML(typ="safe")
@@ -508,6 +519,7 @@ def main(
             max_n_labels=max_n_labels,
             sim_threshold=sim_threshold,
             mixup_enabled=mixup_enabled,
+            stacked_mixup_enabled=stacked_mixup_enabled,
             mixup_alpha=mixup_alpha,
             **model_cnf.get("train", {}),
         )

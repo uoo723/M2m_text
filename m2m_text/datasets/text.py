@@ -359,7 +359,7 @@ class DrugReviewSmallv2(DrugReview):
 
 
 class EURLex(TextDataset):
-    """`EURLex Dataset.
+    """`EURLex Dataset.`
 
     Args:
         root (string, optional): Root directory of dataset. default: ./data
@@ -378,6 +378,174 @@ class EURLex(TextDataset):
     file_list = [
         ("train_raw.npz", "62e50968bc5c469b6ac0270e27cc891d"),
         ("test_raw.npz", "87fef94edf237e2071fd1827618824c6"),
+    ]
+
+    w2v_model = "glove.840B.300d.gensim"
+    w2v_model_url = "https://drive.google.com/uc?id=1q9n32NeCVuCJpZK-aoH48-iExW2Hf9nS"
+    w2v_model_tgz_md5 = "baa5434ab9d5833b56805dc12f0094a0"
+
+    train_npz = "train.npz"
+    test_npz = "test.npz"
+
+    def __init__(
+        self,
+        root: str = "./data",
+        train: bool = True,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(root=root, train=train, multi_label=True, *args, **kwargs)
+        self.download()
+
+        if not self.tokenizer_model_name:
+            self.download_w2v_model()
+
+        self.texts, self.labels = self.load_data()
+
+    def __len__(self):
+        return self.labels.shape[0]
+
+    def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
+        if type(self.texts) == tuple:
+            texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        else:
+            texts = torch.from_numpy(self.texts[index])
+
+        return texts, torch.from_numpy(self.labels[index].toarray().squeeze()).float()
+
+    def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        npz_path = os.path.join(
+            self.data_dir, "train_raw.npz" if self.train else "test_raw.npz"
+        )
+
+        with np.load(npz_path, allow_pickle=True) as npz:
+            return npz["texts"], npz["labels"]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+    @property
+    def x(self) -> TDataX:
+        return self.texts
+
+    @x.setter
+    def x(self, x):
+        self.texts = x
+
+    @property
+    def y(self) -> TDataY:
+        return self.labels
+
+    @y.setter
+    def y(self, y):
+        self.labels = y
+
+
+class AmazonCat(TextDataset):
+    """`AmazonCat Dataset.`
+
+    Args:
+        root (string, optional): Root directory of dataset. default: ./data
+        train (bool, optional): If True, creates dataset from training set,
+            otherwise creates from test set. default: True
+        maxlen (int, optional): Maximum length of input text. default: 500
+    """
+
+    base_folder = "AmazonCat"
+
+    url = "https://drive.google.com/uc?id=1HiWzrk1d-OX4pvjVdABX7Sf0ehKauEjB"
+
+    filename = "AmazonCat.tar.gz"
+    tgz_md5 = "954f0519b68313fa7ab39923c5b76c6f"
+
+    file_list = [
+        ("train_raw.npz", "883c9a53ab6e2216683d85a79f61e36d"),
+        ("test_raw.npz", "7438193f441317215e473a6c52896612"),
+    ]
+
+    w2v_model = "glove.840B.300d.gensim"
+    w2v_model_url = "https://drive.google.com/uc?id=1q9n32NeCVuCJpZK-aoH48-iExW2Hf9nS"
+    w2v_model_tgz_md5 = "baa5434ab9d5833b56805dc12f0094a0"
+
+    train_npz = "train.npz"
+    test_npz = "test.npz"
+
+    def __init__(
+        self,
+        root: str = "./data",
+        train: bool = True,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(root=root, train=train, multi_label=True, *args, **kwargs)
+        self.download()
+
+        if not self.tokenizer_model_name:
+            self.download_w2v_model()
+
+        self.texts, self.labels = self.load_data()
+
+    def __len__(self):
+        return self.labels.shape[0]
+
+    def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
+        if type(self.texts) == tuple:
+            texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        else:
+            texts = torch.from_numpy(self.texts[index])
+
+        return texts, torch.from_numpy(self.labels[index].toarray().squeeze()).float()
+
+    def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        npz_path = os.path.join(
+            self.data_dir, "train_raw.npz" if self.train else "test_raw.npz"
+        )
+
+        with np.load(npz_path, allow_pickle=True) as npz:
+            return npz["texts"], npz["labels"]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+    @property
+    def x(self) -> TDataX:
+        return self.texts
+
+    @x.setter
+    def x(self, x):
+        self.texts = x
+
+    @property
+    def y(self) -> TDataY:
+        return self.labels
+
+    @y.setter
+    def y(self, y):
+        self.labels = y
+
+
+class Wiki10(TextDataset):
+    """`Wiki10 Dataset.`
+
+    Args:
+        root (string, optional): Root directory of dataset. default: ./data
+        train (bool, optional): If True, creates dataset from training set,
+            otherwise creates from test set. default: True
+        maxlen (int, optional): Maximum length of input text. default: 500
+    """
+
+    base_folder = "Wiki10"
+
+    url = "https://drive.google.com/uc?id=12DJFss2AxFoy6cF14UbdnrksDZarl8Ay"
+
+    filename = "Wiki10.tar.gz"
+    tgz_md5 = "9736461bce798bacf215179a1381717a"
+
+    file_list = [
+        ("train_raw.npz", "93ecf58d863c2fa9ff7da1519fa199cf"),
+        ("test_raw.npz", "860fcd37c4d062747f512948cab75686"),
     ]
 
     w2v_model = "glove.840B.300d.gensim"

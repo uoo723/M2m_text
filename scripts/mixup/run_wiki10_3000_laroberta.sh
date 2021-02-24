@@ -2,8 +2,7 @@
 
 args=(
     --model-cnf config/models/LaRoberta.yaml
-    --data-cnf config/datasets/EURLex-300_Roberta.yaml
-    # --gen
+    --data-cnf config/datasets/Wiki10-3000_Roberta.yaml
     --mixup-enabled
     --epoch 150
     --lr 1e-3
@@ -16,18 +15,10 @@ args=(
     --early-criterion 'p5'
     --seed $1
     --warm 50
-    --max-n-labels 8
-    --gamma 0.95
-    --lam 0.5
-    --attack-iter 3
     --swa-warmup -1
     --early 50
     --eval-step 50
-    --perturb-attack "l2"
-    --step-attack "inf"
-    --step-size 0.01
-    --sim-threshold 0.6
-    --net-t ./checkpoint/Mixup_v5_stacked_mixup_LaRoberta_EURLex_$1_last.pt
+    # --net-t ./checkpoint/Mixup_v5_stacked_mixup_LaRoberta_EURLex_$1_last.pt
     # --net-g ./checkpoint/baseline_v5_LaRoberta_EURLex_$1.pt
 )
 
