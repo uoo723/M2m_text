@@ -5,7 +5,7 @@ args=(
     --data-cnf config/datasets/AmazonCat-1000.yaml
     --mixup-enabled
     --stacked-mixup-enabled
-    --warm 0
+    --warm 10
     --epoch 100
     --lr 1e-3
     --eta-min 1e-5
