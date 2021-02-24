@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+TOKENIZERS_PARALLELISM=false
+
 args=(
     --model-cnf config/models/LaRoberta.yaml
     --data-cnf config/datasets/Wiki10-3000_Roberta.yaml

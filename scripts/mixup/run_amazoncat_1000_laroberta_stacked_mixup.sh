@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+TOKENIZERS_PARALLELISM=false
+
 args=(
     --model-cnf config/models/LaRoberta.yaml
     --data-cnf config/datasets/AmazonCat-1000_Roberta.yaml
