@@ -457,11 +457,11 @@ class AmazonCat(TextDataset):
     url = "https://drive.google.com/uc?id=1HiWzrk1d-OX4pvjVdABX7Sf0ehKauEjB"
 
     filename = "AmazonCat.tar.gz"
-    tgz_md5 = "954f0519b68313fa7ab39923c5b76c6f"
+    tgz_md5 = "4298b78dfeeabdc7f0ae694e1810b715"
 
     file_list = [
-        ("train_raw.npz", "883c9a53ab6e2216683d85a79f61e36d"),
-        ("test_raw.npz", "7438193f441317215e473a6c52896612"),
+        ("train_raw.npz", "e0d159b51257b0f3b269711600cda8f4"),
+        ("test_raw.npz", "3da6b6f59e4c56f6e8cc767b3ab50482"),
     ]
 
     w2v_model = "glove.840B.300d.gensim"
