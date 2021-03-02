@@ -6,7 +6,7 @@ args=(
     --mixup-enabled
     --double-mixup-enabled
     --warm 50
-    --epoch 100
+    --epoch 150
     --lr 1e-3
     --eta-min 1e-5
     --train-batch-size 300
