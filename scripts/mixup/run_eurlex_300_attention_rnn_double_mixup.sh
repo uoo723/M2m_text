@@ -6,10 +6,10 @@ args=(
     --mixup-enabled
     --double-mixup-enabled
     --warm 50
-    --epoch 150
+    --epoch 100
     --lr 1e-3
     --eta-min 1e-5
-    --train-batch-size 100
+    --train-batch-size 300
     --test-batch-size 500
     --ckpt-name Double_Mixup
     --no-over
