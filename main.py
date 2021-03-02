@@ -280,6 +280,12 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     help="Enable stacked-mixup",
 )
 @click.option(
+    "--double-mixup-enabled",
+    is_flag=True,
+    default=False,
+    help="Enable double-mixup",
+)
+@click.option(
     "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
 )
 def main(
@@ -324,6 +330,7 @@ def main(
     sim_threshold,
     mixup_enabled,
     stacked_mixup_enabled,
+    double_mixup_enabled,
     mixup_alpha,
 ):
     yaml = YAML(typ="safe")
@@ -520,6 +527,7 @@ def main(
             sim_threshold=sim_threshold,
             mixup_enabled=mixup_enabled,
             stacked_mixup_enabled=stacked_mixup_enabled,
+            double_mixup_enabled=double_mixup_enabled,
             mixup_alpha=mixup_alpha,
             **model_cnf.get("train", {}),
         )

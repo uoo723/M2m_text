@@ -87,6 +87,7 @@ def train_mixup_step(
     step_attack="inf",
     multi_label=False,
     stacked_mixup_enabled=False,
+    double_mixup_enabled=False,
 ) -> float:
     model.train()
 
@@ -131,11 +132,25 @@ def train_mixup_step(
         loss1 = criterion(mixed_outputs, mixed_targets)
         loss2 = criterion(mixed_outputs2, mixed_targets2)
         loss3 = criterion(outputs, data_y)
-        loss = (loss1 + loss2 + loss3) / 3
+        loss = loss1 + loss2 + loss3
 
         mean_n_labels = (mixed_targets2 > 0).sum(dim=-1).float().mean()
     else:
         loss = criterion(mixed_outputs, mixed_targets)
+
+        if double_mixup_enabled:
+            mixed_inputs2, mixed_targets2 = mixup_fn(orig_inputs, data_y)
+            mixed_outputs2 = get_model_outputs(
+                model, mixed_inputs2, other_inputs, last_input_opts, is_transformer
+            )
+            outputs = get_model_outputs(
+                model, orig_inputs, other_inputs, last_input_opts, is_transformer
+            )
+
+            loss2 = criterion(mixed_outputs2, mixed_targets)
+            loss3 = criterion(outputs, data_y)
+
+            loss = loss + loss2 + loss3
 
         mean_n_labels = (mixed_targets > 0).sum(dim=-1).float().mean()
 
@@ -556,6 +571,7 @@ def train(
     sim_threshold=0.7,
     mixup_enabled=False,
     stacked_mixup_enabled=False,
+    double_mixup_enabled=False,
     mixup_alpha=0.4,
 ):
     global_step, best = 0, 0.0
@@ -693,6 +709,7 @@ def train(
                     step_attack=step_attack,
                     multi_label=multi_label,
                     stacked_mixup_enabled=stacked_mixup_enabled,
+                    double_mixup_enabled=double_mixup_enabled,
                 )
 
                 mean_n_labels_list.append(mean_n_labels)
