@@ -129,3 +129,100 @@ class MLLinear(nn.Module):
         for linear in self.linear:
             nn.init.xavier_uniform_(linear.weight)
         nn.init.xavier_uniform_(self.output.weight)
+
+
+# https://github.com/tkipf/pygcn/blob/master/pygcn/layers.py
+class GraphConvolution(nn.Module):
+    """GCN layer"""
+
+    def __init__(self, in_features, out_features, bias=True):
+        super(GraphConvolution, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.FloatTensor(in_features, out_features))
+        if bias:
+            self.bias = nn.Parameter(torch.FloatTensor(out_features))
+        else:
+            self.register_parameter("bias", None)
+        self.reset_parameter()
+
+    def reset_parameter(self):
+        stdv = 1.0 / np.sqrt(self.weight.size(1))
+        self.weight.data.uniform_(-stdv, stdv)
+        if self.bias is not None:
+            self.bias.data.uniform_(-stdv, stdv)
+
+    def forward(self, inputs, adj):
+        support = inputs @ self.weight
+        output = adj @ support
+        if self.bias is not None:
+            return output + self.bias
+        else:
+            return output
+
+    def __repr__(self):
+        return f"{self.__class__.__name__} ({self.in_features} -> {self.out_features}"
+
+
+class GCNLayer(nn.Module):
+    def __init__(
+        self,
+        num_labels: int,
+        hidden_size: List[int],
+        dropout: float,
+        init_adj: Optional[torch.Tensor] = None,
+    ):
+        super(GCNLayer, self).__init__()
+        self.gc = nn.ModuleList(
+            GraphConvolution(in_s, out_s)
+            for in_s, out_s in zip(hidden_size[:-1], hidden_size[1:])
+        )
+        self.adj = nn.Parameter(torch.FloatTensor(num_labels, num_labels))
+        self.dropout = nn.Dropout(dropout)
+
+        if init_adj is not None:
+            self.adj.data = init_adj
+        else:
+            nn.init.xavier_uniform_(self.adj.data)
+
+    def forward(self, inputs):
+        outputs = inputs.mean(dim=0)
+        for layer in self.gc:
+            outputs = F.relu(layer(outputs, self.adj))
+            outputs = self.dropout(outputs)
+
+        return outputs
+
+
+# Refernce: https://github.com/XunGuangxu/CorNet/blob/master/deepxml/cornet.py
+class CorNetBlock(nn.Module):
+    def __init__(self, context_size, output_size):
+        super(CorNetBlock, self).__init__()
+        self.dstbn2cntxt = nn.Linear(output_size, context_size)
+        self.cntxt2dstbn = nn.Linear(context_size, output_size)
+
+    def forward(self, output_dstrbtn):
+        identity_logits = output_dstrbtn
+        output_dstrbtn = torch.sigmoid(output_dstrbtn)
+        context_vector = self.dstbn2cntxt(output_dstrbtn)
+        context_vector = F.elu(context_vector)
+        output_dstrbtn = self.cntxt2dstbn(context_vector)
+        output_dstrbtn = output_dstrbtn + identity_logits
+        return output_dstrbtn
+
+
+# Refernce: https://github.com/XunGuangxu/CorNet/blob/master/deepxml/cornet.py
+class CorNet(nn.Module):
+    def __init__(self, output_size, context_size, n_blocks, **kwargs):
+        super(CorNet, self).__init__()
+        self.intlv_layers = nn.ModuleList(
+            [CorNetBlock(context_size, output_size, **kwargs) for _ in range(n_blocks)]
+        )
+        for layer in self.intlv_layers:
+            nn.init.xavier_uniform_(layer.dstbn2cntxt.weight)
+            nn.init.xavier_uniform_(layer.cntxt2dstbn.weight)
+
+    def forward(self, logits):
+        for layer in self.intlv_layers:
+            logits = layer(logits)
+        return logits

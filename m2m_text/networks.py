@@ -9,7 +9,6 @@ from itertools import combinations
 from typing import List, Optional
 
 import torch
-from torch._C import Value
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.configuration_utils import PretrainedConfig
@@ -20,7 +19,7 @@ from transformers.models.roberta.modeling_roberta import (
     RobertaPreTrainedModel,
 )
 
-from .modules import Embedding, LSTMEncoder, MLAttention, MLLinear
+from .modules import CorNet, Embedding, GCNLayer, LSTMEncoder, MLAttention, MLLinear
 
 
 class Network(nn.Module):
@@ -531,3 +530,215 @@ class LaRobertaV2(RobertaPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
+class AttentionRGCN(Network):
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        linear_size: List[int],
+        gcn_hidden_size: List[int],
+        dropout: float,
+        max_length: int,
+        init_adj: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        super(AttentionRGCN, self).__init__(emb_size, **kwargs)
+        self.batch_m = nn.BatchNorm1d(max_length)
+        self.batch_m2 = nn.BatchNorm1d(num_labels)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.attention = MLAttention(num_labels, hidden_size * 2)
+        self.gcl = GCNLayer(
+            num_labels, [hidden_size * 2] + gcn_hidden_size, dropout, init_adj
+        )
+        self.linear = MLLinear([gcn_hidden_size[-1] + hidden_size * 2] + linear_size, 1)
+
+    def forward(
+        self,
+        inputs,
+        return_emb=False,
+        pass_emb=False,
+        return_hidden=False,
+        pass_hidden=False,
+        return_attn=False,
+        pass_attn=False,
+        rnn_training=False,
+        **kwargs,
+    ):
+        if return_emb and pass_emb:
+            raise ValueError("`return_emb` and `pass_emb` both cannot be True")
+
+        if return_hidden and pass_hidden:
+            raise ValueError("`return_hidden` and `pass_hidden` both cannot be True")
+
+        if return_attn and pass_attn:
+            raise ValueError("`return_attn` and `pass_attn` both cannot be True")
+
+        return_kwargs = {
+            "return_emb": return_emb,
+            "return_hidden": return_hidden,
+            "return_attn": return_attn,
+        }
+
+        pass_kwargs = {
+            "pass_emb": pass_emb,
+            "pass_hidden": pass_hidden,
+            "pass_attn": pass_attn,
+        }
+
+        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
+            if return_kwargs[kw1] and return_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
+            if pass_kwargs[kw1] and pass_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        if not pass_emb and not pass_hidden and not pass_attn:
+            emb_out, lengths, masks = self.emb(inputs, **kwargs)
+        elif pass_emb:
+            emb_out, lengths, masks = inputs
+        else:
+            emb_out, lengths, masks = None, None, None
+
+        if return_emb:
+            return emb_out, lengths, masks
+
+        if emb_out is not None:
+            emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+            emb_out = self.batch_m(emb_out)
+
+            rnn_out = self.lstm(
+                emb_out, lengths, training=rnn_training
+            )  # N, L, hidden_size * 2
+        elif pass_hidden:
+            rnn_out, lengths, masks = inputs
+        else:
+            rnn_out, lengths, masks = None, None, None
+
+        if return_hidden:
+            return rnn_out, lengths, masks
+
+        if rnn_out is not None:
+            attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
+        elif pass_attn:
+            attn_out = inputs
+        else:
+            attn_out = None
+
+        if return_attn:
+            return (attn_out,)
+
+        attn_out = self.batch_m2(attn_out)
+        gcn_out = self.gcl(attn_out)
+        outputs = torch.cat(
+            [attn_out, gcn_out.expand(attn_out.shape[0], *gcn_out.shape)], dim=-1
+        )
+
+        return self.linear(outputs)
+
+
+class CornetAttentionRNN(Network):
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        linear_size: List[int],
+        dropout: float,
+        max_length: int,
+        cor_context_size: int,
+        cor_n_blocks: int,
+        **kwargs,
+    ):
+        super(CornetAttentionRNN, self).__init__(emb_size, **kwargs)
+        self.batch_m = nn.BatchNorm1d(max_length)
+        self.batch_m2 = nn.BatchNorm1d(num_labels)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.attention = MLAttention(num_labels, hidden_size * 2)
+        self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
+        self.cornet = CorNet(num_labels, cor_context_size, cor_n_blocks)
+
+    def forward(
+        self,
+        inputs,
+        return_emb=False,
+        pass_emb=False,
+        return_hidden=False,
+        pass_hidden=False,
+        return_attn=False,
+        pass_attn=False,
+        rnn_training=False,
+        **kwargs,
+    ):
+        if return_emb and pass_emb:
+            raise ValueError("`return_emb` and `pass_emb` both cannot be True")
+
+        if return_hidden and pass_hidden:
+            raise ValueError("`return_hidden` and `pass_hidden` both cannot be True")
+
+        if return_attn and pass_attn:
+            raise ValueError("`return_attn` and `pass_attn` both cannot be True")
+
+        return_kwargs = {
+            "return_emb": return_emb,
+            "return_hidden": return_hidden,
+            "return_attn": return_attn,
+        }
+
+        pass_kwargs = {
+            "pass_emb": pass_emb,
+            "pass_hidden": pass_hidden,
+            "pass_attn": pass_attn,
+        }
+
+        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
+            if return_kwargs[kw1] and return_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
+            if pass_kwargs[kw1] and pass_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        if not pass_emb and not pass_hidden and not pass_attn:
+            emb_out, lengths, masks = self.emb(inputs, **kwargs)
+        elif pass_emb:
+            emb_out, lengths, masks = inputs
+        else:
+            emb_out, lengths, masks = None, None, None
+
+        if return_emb:
+            return emb_out, lengths, masks
+
+        if emb_out is not None:
+            emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+            emb_out = self.batch_m(emb_out)
+
+            rnn_out = self.lstm(
+                emb_out, lengths, training=rnn_training
+            )  # N, L, hidden_size * 2
+        elif pass_hidden:
+            rnn_out, lengths, masks = inputs
+        else:
+            rnn_out, lengths, masks = None, None, None
+
+        if return_hidden:
+            return rnn_out, lengths, masks
+
+        if rnn_out is not None:
+            attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
+        elif pass_attn:
+            attn_out = inputs
+        else:
+            attn_out = None
+
+        if return_attn:
+            return (attn_out,)
+
+        attn_out = self.batch_m2(attn_out)
+        linear_out = self.linear(attn_out)
+        return self.cornet(linear_out)

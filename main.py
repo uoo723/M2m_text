@@ -27,11 +27,14 @@ from m2m_text.datasets import (
     DrugReviewSmall,
     DrugReviewSmallv2,
     EURLex,
+    EURLex4K,
     Wiki10,
 )
 from m2m_text.metrics import get_inv_propensity
 from m2m_text.networks import (
+    AttentionRGCN,
     AttentionRNN,
+    CornetAttentionRNN,
     FCNet,
     LaRoberta,
     LaRobertaV2,
@@ -49,6 +52,8 @@ from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
+    "AttentionRGCN": AttentionRGCN,
+    "CornetAttentionRNN": CornetAttentionRNN,
     "FCNet": FCNet,
     "Roberta": RobertaForSeqClassification,
     "LaRoberta": LaRoberta,
@@ -63,11 +68,12 @@ DATASET_CLS = {
     "DrugReviewSmall": DrugReviewSmall,
     "DrugReviewSmallv2": DrugReviewSmallv2,
     "EURLex": EURLex,
+    "EURLex4K": EURLex4K,
     "AmazonCat": AmazonCat,
     "Wiki10": Wiki10,
 }
 
-MULTI_LABEL_DATASETS = ["EURLex", "AmazonCat", "Wiki10"]
+MULTI_LABEL_DATASETS = ["EURLex", "EURLex4K", "AmazonCat", "Wiki10"]
 
 
 def set_logger(log_path: str):

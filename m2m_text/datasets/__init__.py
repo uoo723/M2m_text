@@ -9,6 +9,7 @@ from .text import (
     DrugReviewSmall,
     DrugReviewSmallv2,
     EURLex,
+    EURLex4K,
     Wiki10,
 )
 

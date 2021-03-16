@@ -442,6 +442,24 @@ class EURLex(TextDataset):
         self.labels = y
 
 
+class EURLex4K(EURLex):
+    base_folder = "EURLex4K"
+
+    url = "https://drive.google.com/uc?id=1A0g4Br87dYtLZNVlL8FVdtTC6_uVbPY5"
+
+    filename = "EURLex4K.tar.gz"
+    tgz_md5 = "b032927b830a639468c4ca79f226d6c2"
+
+    file_list = [
+        ("train_raw.npz", "a11ea87f35eae62aaa0afe15034ec54e"),
+        ("test_raw.npz", "0edbff7d6b8c3424d2bcc6435da929b2"),
+    ]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+
 class AmazonCat(TextDataset):
     """`AmazonCat Dataset.`
 

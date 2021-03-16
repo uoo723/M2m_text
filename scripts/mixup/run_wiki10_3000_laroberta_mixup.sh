@@ -10,9 +10,9 @@ args=(
     --epoch 100
     --lr 1e-3
     --eta-min 1e-5
-    --train-batch-size 100
+    --train-batch-size 120
     --test-batch-size 500
-    --ckpt-name Mixup
+    --ckpt-name Double_Mixup
     --no-over
     --no-over-gen
     --early-criterion 'p5'
