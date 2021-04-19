@@ -734,6 +734,9 @@ class EaseAttentionRNN(AttentionRNN):
 
 
 class LabelGCNAttentionRNN(AttentionRNN):
+    """
+    Last layer of GCN is readout
+    """
     def __init__(
         self,
         num_labels: int,
@@ -781,6 +784,56 @@ class LabelGCNAttentionRNN(AttentionRNN):
 
 
 class LabelGCNAttentionRNNv2(AttentionRNN):
+    """
+    Last layer of GCN is MLLinear
+    """
+    def __init__(
+        self,
+        num_labels: int,
+        hidden_size: int,
+        gcn_hidden_size: List[int],
+        gcl_linear_size: List[int],
+        gcn_dropout: float,
+        gcn_init_adj: Optional[torch.Tensor] = None,
+        gcn_adj_trainable: bool = False,
+        enable_gating: bool = False,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            num_labels=num_labels,
+            hidden_size=hidden_size,
+            *args,
+            **kwargs,
+        )
+
+        self.gcl = GCNLayer(
+            num_labels,
+            [hidden_size * 2] + gcn_hidden_size,
+            gcn_dropout,
+            gcn_init_adj,
+            gcn_adj_trainable,
+        )
+
+        self.gcl_linear = MLLinear(gcn_hidden_size[-1:] + gcl_linear_size, 1)
+        self.enable_gating = enable_gating
+        if enable_gating:
+            self.gate = GateAttention(num_labels, 2)
+
+    def forward(self, *args, **kwargs):
+        attn_out = super().forward(return_attn=True, *args, **kwargs)[0]
+        outputs1 = self.gcl_linear(self.gcl(attn_out))
+        outputs2 = self.linear(attn_out)
+
+        if self.enable_gating:
+            outputs = self.gate(torch.stack([outputs1, outputs2], dim=1)).sum(dim=1)
+        else:
+            outputs = outputs1 + outputs2
+
+        return outputs
+
+
+class LabelGCNAttentionRNNv3(AttentionRNN):
     def __init__(
         self,
         num_labels: int,

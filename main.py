@@ -41,6 +41,7 @@ from m2m_text.networks import (
     EaseAttentionRNN,
     FCNet,
     LabelGCNAttentionRNN,
+    LabelGCNAttentionRNNv2,
     LaRoberta,
     LaRobertaV2,
     RobertaForSeqClassification,
@@ -67,6 +68,7 @@ MODEL_CLS = {
     "LaRobertaV2": LaRobertaV2,
     "EaseAttentionRNN": EaseAttentionRNN,
     "LabelGCNAttentionRNN": LabelGCNAttentionRNN,
+    "LabelGCNAttentionRNNv2": LabelGCNAttentionRNNv2,
 }
 
 TRANSFORMER_MODELS = ["Roberta", "LaRoberta", "LaRobertaV2"]
@@ -118,7 +120,7 @@ def load_model(
             model_cnf["model"]["dataset"] = dataset
             model_cnf["model"]["device"] = device
 
-        if model_name == "LabelGCNAttentionRNN":
+        if model_name in ["LabelGCNAttentionRNN", "LabelGCNAttentionRNNv2"]:
             lamda = model_cnf["model"].pop("lamda")
             top_adj = model_cnf["model"].pop("top_adj")
             b = get_ease_weight(dataset, lamda)
