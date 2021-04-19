@@ -2,11 +2,12 @@
 Created on 2020/12/31
 @author Sangwoo Han
 """
-
 import copy
 import os
 import random
+import warnings
 from pathlib import Path
+from typing import Optional
 
 import click
 import logzero
@@ -16,7 +17,7 @@ import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
-from scipy.sparse import csr_matrix
+from scipy.sparse import csgraph, csr_matrix
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -30,12 +31,16 @@ from m2m_text.datasets import (
     EURLex4K,
     Wiki10,
 )
+from m2m_text.datasets._base import Dataset
 from m2m_text.metrics import get_inv_propensity
 from m2m_text.networks import (
     AttentionRGCN,
     AttentionRNN,
     CornetAttentionRNN,
+    CornetAttentionRNNv2,
+    EaseAttentionRNN,
     FCNet,
+    LabelGCNAttentionRNN,
     LaRoberta,
     LaRobertaV2,
     RobertaForSeqClassification,
@@ -48,16 +53,20 @@ from m2m_text.utils.data import (
     get_n_samples_per_class,
     get_oversampled_data,
 )
+from m2m_text.utils.ease import get_ease_weight
 from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
     "AttentionRGCN": AttentionRGCN,
     "CornetAttentionRNN": CornetAttentionRNN,
+    "CornetAttentionRNNv2": CornetAttentionRNNv2,
     "FCNet": FCNet,
     "Roberta": RobertaForSeqClassification,
     "LaRoberta": LaRoberta,
     "LaRobertaV2": LaRobertaV2,
+    "EaseAttentionRNN": EaseAttentionRNN,
+    "LabelGCNAttentionRNN": LabelGCNAttentionRNN,
 }
 
 TRANSFORMER_MODELS = ["Roberta", "LaRoberta", "LaRobertaV2"]
@@ -89,7 +98,14 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
 
 
-def load_model(model_name: str, num_labels: int, model_cnf: dict):
+def load_model(
+    model_name: str,
+    num_labels: int,
+    model_cnf: dict,
+    dataset: Optional[Dataset] = None,
+    device: torch.device = torch.device("cpu"),
+    verbose: bool = False,
+):
     model_cnf = copy.deepcopy(model_cnf)
 
     if model_name in TRANSFORMER_MODELS:
@@ -98,6 +114,38 @@ def load_model(model_name: str, num_labels: int, model_cnf: dict):
             pretrained_model_name, num_labels=num_labels, **model_cnf["model"]
         )
     else:
+        if model_name == "EaseAttentionRNN":
+            model_cnf["model"]["dataset"] = dataset
+            model_cnf["model"]["device"] = device
+
+        if model_name == "LabelGCNAttentionRNN":
+            lamda = model_cnf["model"].pop("lamda")
+            top_adj = model_cnf["model"].pop("top_adj")
+            b = get_ease_weight(dataset, lamda)
+
+            adj = np.zeros_like(b)
+
+            if type(top_adj) == int:
+                indices = np.argsort(b)[:, ::-1][:, :top_adj]
+
+                rows = np.array(
+                    [[i for _ in range(top_adj)] for i in range(b.shape[0])]
+                ).reshape(-1)
+                cols = indices.reshape(-1)
+
+                indices = (rows, cols)
+            else:
+                indices = np.where(b >= top_adj)
+
+            adj[indices] = 1
+
+            adj = csgraph.laplacian(adj, normed=True)
+
+            if verbose:
+                sparsity = np.count_nonzero(adj) / adj.shape[0] ** 2
+                logger.info(f"Sparsity of label adj: {sparsity:.8f}")
+            model_cnf["model"]["gcn_init_adj"] = torch.from_numpy(adj).float()
+
         network = MODEL_CLS[model_name](num_labels=num_labels, **model_cnf["model"])
 
     return network
@@ -233,7 +281,9 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 )
 @click.option(
     "--early-criterion",
-    type=click.Choice(["acc", "bal_acc", "p1", "p3", "p5", "psp1", "psp3", "psp5"]),
+    type=click.Choice(
+        ["acc", "bal_acc", "p1", "p3", "p5", "n1", "n3", "n5", "psp1", "psp3", "psp5"]
+    ),
     default="bal_acc",
     help="Early stopping criterion",
 )
@@ -374,7 +424,9 @@ def main(
         test_size=data_cnf.get("valid_size", 200), **data_cnf["dataset"]
     )
 
-    test_dataset = DATASET_CLS[dataset_name](train=False, **data_cnf["dataset"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        test_dataset = DATASET_CLS[dataset_name](train=False, **data_cnf["dataset"])
 
     le = get_le(train_dataset.le_path)
     num_labels = len(le.classes_)
@@ -429,12 +481,14 @@ def main(
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
-    network = load_model(model_name, num_labels, model_cnf)
+    network = load_model(
+        model_name, num_labels, model_cnf, train_dataset, device, verbose=True
+    )
 
     network.to(device)
 
     if net_g:
-        network_g = load_model(model_name, num_labels, model_cnf)
+        network_g = load_model(model_name, num_labels, model_cnf, verbose=True)
         load_checkpoint(net_g, network_g, set_rng_state=False)
         network_g.to(device)
     else:
@@ -553,6 +607,8 @@ def main(
     else:
         inv_w = None
         mlb = None
+
+    logger.info(os.path.splitext(os.path.basename(ckpt_path))[0])
 
     evaluate(
         network,

@@ -3,6 +3,7 @@ Created on 2021/01/05
 @author Sangwoo Han
 """
 
+import warnings
 from functools import partial
 from typing import Dict, Hashable, Iterable, Optional
 
@@ -49,18 +50,28 @@ def get_precision_results(
 
     prediction = mlb.classes_[prediction]
 
-    p1 = get_p_1(prediction, targets, mlb)
-    p3 = get_p_3(prediction, targets, mlb)
-    p5 = get_p_5(prediction, targets, mlb)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
 
-    psp1 = get_psp_1(prediction, targets, inv_w, mlb)
-    psp3 = get_psp_3(prediction, targets, inv_w, mlb)
-    psp5 = get_psp_5(prediction, targets, inv_w, mlb)
+        p1 = get_p_1(prediction, targets, mlb)
+        p3 = get_p_3(prediction, targets, mlb)
+        p5 = get_p_5(prediction, targets, mlb)
+
+        n1 = get_n_1(prediction, targets, mlb)
+        n3 = get_n_3(prediction, targets, mlb)
+        n5 = get_n_5(prediction, targets, mlb)
+
+        psp1 = get_psp_1(prediction, targets, inv_w, mlb)
+        psp3 = get_psp_3(prediction, targets, inv_w, mlb)
+        psp5 = get_psp_5(prediction, targets, inv_w, mlb)
 
     return {
         "p1": p1,
         "p3": p3,
         "p5": p5,
+        "n1": n1,
+        "n3": n3,
+        "n5": n5,
         "psp1": psp1,
         "psp3": psp3,
         "psp5": psp5,

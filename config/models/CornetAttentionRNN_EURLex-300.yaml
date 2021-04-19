@@ -3,11 +3,11 @@ name: CornetAttentionRNN
 model:
   hidden_size: 256
   num_layers: 1
-  linear_size: [256, 128]
+  linear_size: [256]
   cor_context_size: 200
   cor_n_blocks: 2
   dropout: 0.5
-  max_length: 200
+  max_length: 500
   emb_trainable: false
   emb_size: 300
   emb_init: data/EURLex/emb_init.npy  # EURLex-300

@@ -8,6 +8,7 @@ Created on 2020/12/31
 from itertools import combinations
 from typing import List, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +20,19 @@ from transformers.models.roberta.modeling_roberta import (
     RobertaPreTrainedModel,
 )
 
-from .modules import CorNet, Embedding, GCNLayer, LSTMEncoder, MLAttention, MLLinear
+from .datasets._base import Dataset
+from .modules import (
+    CorNet,
+    Embedding,
+    GateAttention,
+    GCNLayer,
+    LabelEmbedding,
+    LSTMEncoder,
+    MLAttention,
+    MLLinear,
+    Readout,
+)
+from .utils.ease import get_ease_weight
 
 
 class Network(nn.Module):
@@ -55,8 +68,8 @@ class AttentionRNN(Network):
         **kwargs,
     ):
         super(AttentionRNN, self).__init__(emb_size, **kwargs)
-        self.batch_m = nn.BatchNorm1d(max_length)
-        self.batch_m2 = nn.BatchNorm1d(num_labels)
+        # self.batch_m = nn.BatchNorm1d(max_length)
+        # self.batch_m2 = nn.BatchNorm1d(num_labels)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
         self.attention = MLAttention(num_labels, hidden_size * 2)
         self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
@@ -114,7 +127,7 @@ class AttentionRNN(Network):
 
         if emb_out is not None:
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
-            emb_out = self.batch_m(emb_out)
+            # emb_out = self.batch_m(emb_out)
 
             rnn_out = self.lstm(
                 emb_out, lengths, training=rnn_training
@@ -137,7 +150,7 @@ class AttentionRNN(Network):
         if return_attn:
             return (attn_out,)
 
-        attn_out = self.batch_m2(attn_out)
+        # attn_out = self.batch_m2(attn_out)
 
         return self.linear(attn_out)
 
@@ -641,104 +654,179 @@ class AttentionRGCN(Network):
         return self.linear(outputs)
 
 
-class CornetAttentionRNN(Network):
+class CornetAttentionRNN(AttentionRNN):
     def __init__(
         self,
         num_labels: int,
-        emb_size: int,
-        hidden_size: int,
-        num_layers: int,
-        linear_size: List[int],
-        dropout: float,
-        max_length: int,
-        cor_context_size: int,
-        cor_n_blocks: int,
+        cor_context_size: List[int],
+        *args,
         **kwargs,
     ):
-        super(CornetAttentionRNN, self).__init__(emb_size, **kwargs)
-        self.batch_m = nn.BatchNorm1d(max_length)
-        self.batch_m2 = nn.BatchNorm1d(num_labels)
-        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
-        self.attention = MLAttention(num_labels, hidden_size * 2)
-        self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
-        self.cornet = CorNet(num_labels, cor_context_size, cor_n_blocks)
+        super().__init__(num_labels=num_labels, *args, **kwargs)
+        self.cornet = CorNet(num_labels, cor_context_size)
 
-    def forward(
+    def forward(self, *args, **kwargs):
+        ret = super().forward(*args, **kwargs)
+        if type(ret) == tuple:
+            return ret
+
+        return self.cornet(ret)
+
+
+class CornetAttentionRNNv2(AttentionRNN):
+    def __init__(
         self,
-        inputs,
-        return_emb=False,
-        pass_emb=False,
-        return_hidden=False,
-        pass_hidden=False,
-        return_attn=False,
-        pass_attn=False,
-        rnn_training=False,
+        num_labels: int,
+        cor_context_size: List[int],
+        n_cor_nets: int,
+        *args,
         **kwargs,
     ):
-        if return_emb and pass_emb:
-            raise ValueError("`return_emb` and `pass_emb` both cannot be True")
+        super().__init__(num_labels=num_labels, *args, **kwargs)
+        self.cornet = nn.ModuleList(
+            [CorNet(num_labels, cor_context_size) for _ in range(n_cor_nets)]
+        )
 
-        if return_hidden and pass_hidden:
-            raise ValueError("`return_hidden` and `pass_hidden` both cannot be True")
+    def forward(self, *args, return_raw: bool = False, **kwargs):
+        ret = super().forward(*args, **kwargs)
+        if type(ret) == tuple:
+            return ret
 
-        if return_attn and pass_attn:
-            raise ValueError("`return_attn` and `pass_attn` both cannot be True")
+        if return_raw:
+            return ret
 
-        return_kwargs = {
-            "return_emb": return_emb,
-            "return_hidden": return_hidden,
-            "return_attn": return_attn,
-        }
+        outputs = torch.stack([layer(ret) for layer in self.cornet]).sum(dim=0)
 
-        pass_kwargs = {
-            "pass_emb": pass_emb,
-            "pass_hidden": pass_hidden,
-            "pass_attn": pass_attn,
-        }
+        return outputs
 
-        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
-            if return_kwargs[kw1] and return_kwargs[kw2]:
-                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
 
-        for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
-            if pass_kwargs[kw1] and pass_kwargs[kw2]:
-                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+class EaseAttentionRNN(AttentionRNN):
+    def __init__(
+        self,
+        num_labels: int,
+        dataset: Dataset,
+        device: torch.device = torch.device("cpu"),
+        lamda: float = 50,
+        random_init: bool = True,
+        adj_trainable: bool = True,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(num_labels=num_labels, *args, **kwargs)
+        self.B = nn.Linear(num_labels, num_labels, bias=False)
 
-        if not pass_emb and not pass_hidden and not pass_attn:
-            emb_out, lengths, masks = self.emb(inputs, **kwargs)
-        elif pass_emb:
-            emb_out, lengths, masks = inputs
+        if random_init:
+            nn.init.xavier_uniform_(self.B.weight)
         else:
-            emb_out, lengths, masks = None, None, None
+            B = get_ease_weight(dataset, lamda)
+            self.B.weight.data = torch.from_numpy(B).float()
+            # self.B = torch.from_numpy(B).float().to(device)
 
-        if return_emb:
-            return emb_out, lengths, masks
+        self.B.requires_grad_ = adj_trainable
 
-        if emb_out is not None:
-            emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
-            emb_out = self.batch_m(emb_out)
+    def forward(self, *args, **kwargs):
+        ret = super().forward(*args, **kwargs)
+        if type(ret) == tuple:
+            return ret
 
-            rnn_out = self.lstm(
-                emb_out, lengths, training=rnn_training
-            )  # N, L, hidden_size * 2
-        elif pass_hidden:
-            rnn_out, lengths, masks = inputs
+        return self.B(ret)
+        # return ret
+
+
+class LabelGCNAttentionRNN(AttentionRNN):
+    def __init__(
+        self,
+        num_labels: int,
+        hidden_size: int,
+        gcn_hidden_size: List[int],
+        readout_linear_size: List[int],
+        gcn_dropout: float,
+        gcn_init_adj: Optional[torch.Tensor] = None,
+        gcn_adj_trainable: bool = False,
+        enable_gating: bool = False,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            num_labels=num_labels,
+            hidden_size=hidden_size,
+            *args,
+            **kwargs,
+        )
+
+        self.gcl = GCNLayer(
+            num_labels,
+            [hidden_size * 2] + gcn_hidden_size,
+            gcn_dropout,
+            gcn_init_adj,
+            gcn_adj_trainable,
+        )
+
+        self.readout = Readout(gcn_hidden_size[-1:] + readout_linear_size, num_labels)
+        self.enable_gating = enable_gating
+        if enable_gating:
+            self.gate = GateAttention(num_labels, 2)
+
+    def forward(self, *args, **kwargs):
+        attn_out = super().forward(return_attn=True, *args, **kwargs)[0]
+        outputs1 = self.readout(self.gcl(attn_out))
+        outputs2 = self.linear(attn_out)
+
+        if self.enable_gating:
+            outputs = self.gate(torch.stack([outputs1, outputs2], dim=1)).sum(dim=1)
         else:
-            rnn_out, lengths, masks = None, None, None
+            outputs = outputs1 + outputs2
 
-        if return_hidden:
-            return rnn_out, lengths, masks
+        return outputs
 
-        if rnn_out is not None:
-            attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
-        elif pass_attn:
-            attn_out = inputs
-        else:
-            attn_out = None
 
-        if return_attn:
-            return (attn_out,)
+class LabelGCNAttentionRNNv2(AttentionRNN):
+    def __init__(
+        self,
+        num_labels: int,
+        hidden_size: int,
+        linear_size: List[int],
+        gcn_hidden_size: List[int],
+        gcn_dropout: float,
+        gcn_init_adj: Optional[torch.Tensor] = None,
+        gcn_adj_trainable: bool = False,
+        label_emb_size: int = 256,
+        label_emb_init: Optional[torch.Tensor] = None,
+        label_emb_trainable: bool = True,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            num_labels=num_labels,
+            hidden_size=hidden_size,
+            linear_size=linear_size,
+            *args,
+            **kwargs,
+        )
+        self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
 
-        attn_out = self.batch_m2(attn_out)
-        linear_out = self.linear(attn_out)
-        return self.cornet(linear_out)
+        self.gcl = GCNLayer(
+            num_labels,
+            [hidden_size * 2] + gcn_hidden_size,
+            gcn_dropout,
+            gcn_init_adj,
+            gcn_adj_trainable,
+        )
+
+        self.linear = MLLinear([hidden_size * 2 + label_emb_size] + linear_size, 1)
+
+        if label_emb_init is not None:
+            self.label_emb.data = label_emb_init
+
+        self.label_emb.requires_grad = label_emb_trainable
+
+    def forward(self, *args, **kwargs):
+        attn_out = super().forward(return_attn=True, *args, **kwargs)[0]
+        gcn_out = self.gcl(self.label_emb).unsqueeze(0)
+
+        repeat_vals = [attn_out.shape[0] // gcn_out.shape[0]] + [-1] * (
+            len(gcn_out.shape) - 1
+        )
+        outputs = torch.cat((attn_out, gcn_out.expand(*repeat_vals)), dim=-1)
+
+        return self.linear(outputs)

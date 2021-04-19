@@ -53,6 +53,40 @@ class Embedding(nn.Module):
         return emb_out[:, : inputs.size(-1)], lengths, masks[:, : inputs.size(-1)]
 
 
+class LabelEmbedding(nn.Module):
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: Optional[int] = None,
+        emb_init: Optional[Union[np.ndarray, str]] = None,
+        emb_trainable: bool = True,
+        dropout: bool = 0.2,
+    ):
+        super().__init__()
+        if emb_init is not None:
+            if type(emb_init) == str:
+                emb_init = np.load(emb_init)
+            if emb_size is not None:
+                assert emb_size == emb_init.shape[1]
+            assert num_labels == emb_init.shape[0]
+        else:
+            assert emb_size is not None
+
+        self.emb = nn.Embedding(
+            num_labels,
+            emb_size,
+            sparse=True,
+            _weight=torch.from_numpy(emb_init).float()
+            if emb_init is not None
+            else None,
+        )
+        self.emb.weight.requires_grad = emb_trainable
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, inputs):
+        return self.dropout(self.emb(inputs))
+
+
 class LSTMEncoder(nn.Module):
     def __init__(
         self, input_size: int, hidden_size: int, num_layers: int, dropout: float
@@ -164,6 +198,29 @@ class GraphConvolution(nn.Module):
         return f"{self.__class__.__name__} ({self.in_features} -> {self.out_features}"
 
 
+class Readout(nn.Module):
+    def __init__(self, linear_size: List[int], output_size: int):
+        super().__init__()
+        self.linear = nn.ModuleList(
+            nn.Linear(in_s, out_s)
+            for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
+        )
+        self.output = nn.Linear(linear_size[-1], output_size)
+        self.init_weights()
+
+    def forward(self, inputs):
+        outputs = inputs.sum(dim=1)
+        for linear in self.linear:
+            outputs = F.relu(linear(outputs))
+        return self.output(outputs)
+
+    def init_weights(self):
+        """Initialize weights"""
+        for linear in self.linear:
+            nn.init.xavier_uniform_(linear.weight)
+        nn.init.xavier_uniform_(self.output.weight)
+
+
 class GCNLayer(nn.Module):
     def __init__(
         self,
@@ -171,6 +228,7 @@ class GCNLayer(nn.Module):
         hidden_size: List[int],
         dropout: float,
         init_adj: Optional[torch.Tensor] = None,
+        adj_trainable: bool = True,
     ):
         super(GCNLayer, self).__init__()
         self.gc = nn.ModuleList(
@@ -185,8 +243,10 @@ class GCNLayer(nn.Module):
         else:
             nn.init.xavier_uniform_(self.adj.data)
 
+        self.adj.requires_grad = adj_trainable
+
     def forward(self, inputs):
-        outputs = inputs.mean(dim=0)
+        outputs = inputs
         for layer in self.gc:
             outputs = F.relu(layer(outputs, self.adj))
             outputs = self.dropout(outputs)
@@ -196,12 +256,12 @@ class GCNLayer(nn.Module):
 
 # Refernce: https://github.com/XunGuangxu/CorNet/blob/master/deepxml/cornet.py
 class CorNetBlock(nn.Module):
-    def __init__(self, context_size, output_size):
+    def __init__(self, context_size: int, output_size: int):
         super(CorNetBlock, self).__init__()
         self.dstbn2cntxt = nn.Linear(output_size, context_size)
         self.cntxt2dstbn = nn.Linear(context_size, output_size)
 
-    def forward(self, output_dstrbtn):
+    def forward(self, output_dstrbtn: torch.Tensor):
         identity_logits = output_dstrbtn
         output_dstrbtn = torch.sigmoid(output_dstrbtn)
         context_vector = self.dstbn2cntxt(output_dstrbtn)
@@ -213,10 +273,10 @@ class CorNetBlock(nn.Module):
 
 # Refernce: https://github.com/XunGuangxu/CorNet/blob/master/deepxml/cornet.py
 class CorNet(nn.Module):
-    def __init__(self, output_size, context_size, n_blocks, **kwargs):
+    def __init__(self, output_size: int, context_size: List[int], **kwargs):
         super(CorNet, self).__init__()
         self.intlv_layers = nn.ModuleList(
-            [CorNetBlock(context_size, output_size, **kwargs) for _ in range(n_blocks)]
+            [CorNetBlock(size, output_size, **kwargs) for size in context_size]
         )
         for layer in self.intlv_layers:
             nn.init.xavier_uniform_(layer.dstbn2cntxt.weight)
@@ -226,3 +286,14 @@ class CorNet(nn.Module):
         for layer in self.intlv_layers:
             logits = layer(logits)
         return logits
+
+
+class GateAttention(nn.Module):
+    def __init__(self, hidden_size: int, n_gates: int):
+        super().__init__()
+        self.attention = nn.Linear(hidden_size, n_gates, bias=False)
+        nn.init.xavier_uniform_(self.attention.weight)
+
+    def forward(self, inputs):
+        attn = F.softmax(self.attention(inputs).transpose(1, 2), dim=-1)
+        return attn @ inputs

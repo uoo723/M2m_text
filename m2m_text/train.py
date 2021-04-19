@@ -848,24 +848,29 @@ def train(
                         )
                         return
 
+                swap_swa_params(model, swa_state)
+
                 if len(num_gen_list) > 0:
                     gen_log_msg = (
-                        f" avg gen: {round(np.mean(num_gen_list), 2)} "
-                        f"max prob: {round(max_prob, 4)} "
-                        f"mean prob: {round(mean_prob, 4)}"
+                        f" avg gen: {np.mean(num_gen_list):.2f} "
+                        f"max prob: {max_prob:.4f} "
+                        f"mean prob: {mean_prob:.4f}"
                     )
                 else:
                     gen_log_msg = ""
 
-                log_msg = f"{epoch} {i * train_loader.batch_size} train loss: {round(loss, 5)} "
+                log_msg = (
+                    f"{epoch} {i * train_loader.batch_size} train loss: {loss:.5f} "
+                )
                 log_msg += f"early stop: {e} "
 
                 if multi_label:
-                    log_msg += f"p@5: {round(results['p5'], 4)} "
-                    log_msg += f"psp@5: {round(results['psp5'], 4)}"
+                    log_msg += f"p@5: {results['p5']:.4f} "
+                    log_msg += f"n@5: {results['n5']:.4f} "
+                    log_msg += f"psp@5: {results['psp5']:.4f}"
                 else:
-                    log_msg += f"acc: {round(results['acc'], 4)} "
-                    log_msg += f"bal acc: {round(results['bal_acc'], 4)}"
+                    log_msg += f"acc: {results['acc']:.4f} "
+                    log_msg += f"bal acc: {results['bal_acc']:.4f}"
 
                 log_msg += gen_log_msg
                 log_msg += mixup_log_msg
@@ -936,12 +941,9 @@ def evaluate(
         results = get_precision_results(labels, targets, inv_w, mlb)
 
         logger.info(
-            f"\np@1: {round(results['p1'], 4)}"
-            f"\np@3: {round(results['p3'], 4)}"
-            f"\np@5: {round(results['p5'], 4)}"
-            f"\npsp@1: {round(results['psp1'], 4)}"
-            f"\npsp@3: {round(results['psp3'], 4)}"
-            f"\npsp@5: {round(results['psp5'], 4)}"
+            f"\np@1,3,5: {results['p1']:.4f}, {results['p3']:.4f}, {results['p5']:.4f}"
+            f"\nn@1,3,5: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}"
+            f"\npsp@1,3,5: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}"
         )
     else:
         labels, targets = zip(
