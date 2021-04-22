@@ -737,6 +737,7 @@ class LabelGCNAttentionRNN(AttentionRNN):
     """
     Last layer of GCN is readout
     """
+
     def __init__(
         self,
         num_labels: int,
@@ -787,6 +788,7 @@ class LabelGCNAttentionRNNv2(AttentionRNN):
     """
     Last layer of GCN is MLLinear
     """
+
     def __init__(
         self,
         num_labels: int,
@@ -843,9 +845,6 @@ class LabelGCNAttentionRNNv3(AttentionRNN):
         gcn_dropout: float,
         gcn_init_adj: Optional[torch.Tensor] = None,
         gcn_adj_trainable: bool = False,
-        label_emb_size: int = 256,
-        label_emb_init: Optional[torch.Tensor] = None,
-        label_emb_trainable: bool = True,
         *args,
         **kwargs,
     ):
@@ -856,7 +855,6 @@ class LabelGCNAttentionRNNv3(AttentionRNN):
             *args,
             **kwargs,
         )
-        self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
 
         self.gcl = GCNLayer(
             num_labels,
@@ -866,20 +864,9 @@ class LabelGCNAttentionRNNv3(AttentionRNN):
             gcn_adj_trainable,
         )
 
-        self.linear = MLLinear([hidden_size * 2 + label_emb_size] + linear_size, 1)
-
-        if label_emb_init is not None:
-            self.label_emb.data = label_emb_init
-
-        self.label_emb.requires_grad = label_emb_trainable
+        self.linear = MLLinear(gcn_hidden_size[-1:] + linear_size, 1)
 
     def forward(self, *args, **kwargs):
         attn_out = super().forward(return_attn=True, *args, **kwargs)[0]
-        gcn_out = self.gcl(self.label_emb).unsqueeze(0)
-
-        repeat_vals = [attn_out.shape[0] // gcn_out.shape[0]] + [-1] * (
-            len(gcn_out.shape) - 1
-        )
-        outputs = torch.cat((attn_out, gcn_out.expand(*repeat_vals)), dim=-1)
-
-        return self.linear(outputs)
+        gcn_out = self.gcl(attn_out)
+        return self.linear(gcn_out)
