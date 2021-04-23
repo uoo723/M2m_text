@@ -11,13 +11,14 @@ from typing import Optional
 
 import click
 import logzero
+import mlflow
 import numpy as np
 import scipy.sparse as sp
 import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
-from scipy.sparse import csgraph, csr_matrix
+from scipy.sparse import csr_matrix
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -55,7 +56,8 @@ from m2m_text.utils.data import (
     get_n_samples_per_class,
     get_oversampled_data,
 )
-from m2m_text.utils.ease import get_ease_weight
+from m2m_text.utils.graph import get_adj, get_ease_weight
+from m2m_text.utils.mlflow import log_ckpt, log_config, log_logfile, log_metric, log_tag
 from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {
@@ -132,28 +134,11 @@ def load_model(
             lamda = model_cnf["model"].pop("lamda")
             top_adj = model_cnf["model"].pop("top_adj")
             b = get_ease_weight(dataset, lamda)
-
-            adj = np.zeros_like(b)
-
-            if type(top_adj) == int:
-                indices = np.argsort(b)[:, ::-1][:, :top_adj]
-
-                rows = np.array(
-                    [[i for _ in range(top_adj)] for i in range(b.shape[0])]
-                ).reshape(-1)
-                cols = indices.reshape(-1)
-
-                indices = (rows, cols)
-            else:
-                indices = np.where(b >= top_adj)
-
-            adj[indices] = 1
-
-            adj = csgraph.laplacian(adj, normed=True)
+            adj = get_adj(b, top_adj)
 
             if verbose:
                 sparsity = np.count_nonzero(adj) / adj.shape[0] ** 2
-                logger.info(f"Sparsity of label adj: {sparsity:.8f}")
+                logger.info(f"Sparsity of label adj: {1 - sparsity:.8f}")
             model_cnf["model"]["gcn_init_adj"] = torch.from_numpy(adj).float()
 
         network = MODEL_CLS[model_name](num_labels=num_labels, **model_cnf["model"])
@@ -203,6 +188,9 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     "--model-cnf", type=click.Path(exists=True), help="Model config file path"
 )
 @click.option("--data-cnf", type=click.Path(exists=True), help="Data config file path")
+@click.option(
+    "--run-script", type=click.Path(exists=True), help="Run script file path to log"
+)
 @click.option(
     "--ckpt-root-path",
     type=click.Path(),
@@ -361,6 +349,7 @@ def main(
     seed,
     model_cnf,
     data_cnf,
+    run_script,
     ckpt_root_path,
     ckpt_name,
     net_t,
@@ -400,6 +389,10 @@ def main(
     mixup_alpha,
 ):
     yaml = YAML(typ="safe")
+
+    model_cnf_path = model_cnf
+    data_cnf_path = data_cnf
+
     model_cnf = yaml.load(Path(model_cnf))
     data_cnf = yaml.load(Path(data_cnf))
 
@@ -415,6 +408,9 @@ def main(
     log_filename = os.path.splitext(ckpt_name)[0] + ".log"
 
     if not test_run:
+        mlflow.start_run()
+        log_config(data_cnf_path, model_cnf_path, run_script, test_run)
+        log_tag(model_name, dataset_name, prefix, seed, test_run)
         set_logger(os.path.join(log_dir, log_filename))
 
     if seed is not None:
@@ -561,6 +557,7 @@ def main(
         train(
             network,
             device,
+            test_run,
             start_epoch,
             epoch,
             lr,
@@ -629,7 +626,11 @@ def main(
         multi_label,
         inv_w,
         mlb,
+        test_run,
     )
+
+    log_logfile(os.path.join(log_dir, log_filename), test_run)
+    log_ckpt(ckpt_path, test_run)
     ##################################################################################
 
 

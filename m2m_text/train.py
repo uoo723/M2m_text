@@ -16,6 +16,8 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from m2m_text.utils.mlflow import log_metric
+
 from .loss import classwise_loss
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_label_features, get_mlb
@@ -531,6 +533,7 @@ def generation(
 def train(
     model,
     device,
+    test_run,
     start_epoch,
     epochs,
     lr_init,
@@ -581,6 +584,7 @@ def train(
     swa_state = other_states.get("swa_state", {})
     e = other_states.get("early", 0)
     best = other_states.get("best", 0)
+    global_step = other_states.get("global_step", 0)
 
     if gradient_max_norm is not None:
         gradient_norm_queue = other_states.get(
@@ -792,6 +796,11 @@ def train(
                     )
                     targets = valid_loader.dataset.raw_y
                     results = get_precision_results(labels, targets, inv_w, mlb)
+                    log_metric(
+                        {f"val_{k}": v for k, v in results.items()},
+                        global_step,
+                        test_run,
+                    )
                 else:
                     labels, targets = zip(
                         *[
@@ -815,6 +824,7 @@ def train(
                     "gradient_norm_queue": gradient_norm_queue,
                     "early": e,
                     "best": best,
+                    "global_step": global_step,
                 }
 
                 if results[early_criterion] > best:
@@ -929,6 +939,7 @@ def evaluate(
     multi_label: bool = False,
     inv_w: Optional[np.ndarray] = None,
     mlb: Optional[MultiLabelBinarizer] = None,
+    test_run: bool = False,
 ):
     if multi_label:
         labels = np.concatenate(
@@ -945,6 +956,9 @@ def evaluate(
             f"\nn@1,3,5: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}"
             f"\npsp@1,3,5: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}"
         )
+
+        log_metric(results, test_run=test_run)
+
     else:
         labels, targets = zip(
             *[

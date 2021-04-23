@@ -32,7 +32,7 @@ from .modules import (
     MLLinear,
     Readout,
 )
-from .utils.ease import get_ease_weight
+from .utils.graph import get_ease_weight
 
 
 class Network(nn.Module):

@@ -11,3 +11,4 @@ nltk==3.5
 gensim==3.8.3
 scipy==1.5.2
 transformers==4.2.1
+mlflow==1.15.0
