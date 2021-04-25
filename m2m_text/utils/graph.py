@@ -32,7 +32,11 @@ def get_ease_weight(dataset: Dataset, lamda: float) -> np.ndarray:
     return B
 
 
-def get_adj(b: np.ndarray, top_adj: Union[int, float]) -> np.ndarray:
+def get_adj(
+    b: np.ndarray,
+    top_adj: Union[int, float],
+    use_b_weights: bool = False,
+) -> np.ndarray:
     """Get adjacency matrix from B matrix.
 
     Args:
@@ -58,7 +62,10 @@ def get_adj(b: np.ndarray, top_adj: Union[int, float]) -> np.ndarray:
     else:
         indices = np.where(b >= top_adj)
 
-    adj[indices] = 1
+    if use_b_weights:
+        adj[indices] = b[indices]
+    else:
+        adj[indices] = 1
 
     adj = csgraph.laplacian(adj, normed=True)
 

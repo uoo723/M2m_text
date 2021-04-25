@@ -133,8 +133,9 @@ def load_model(
         if model_name in GCN_MODELS:
             lamda = model_cnf["model"].pop("lamda")
             top_adj = model_cnf["model"].pop("top_adj")
+            use_b_weights = model_cnf["model"].pop("use_b_weights", False)
             b = get_ease_weight(dataset, lamda)
-            adj = get_adj(b, top_adj)
+            adj = get_adj(b, top_adj, use_b_weights)
 
             if verbose:
                 sparsity = np.count_nonzero(adj) / adj.shape[0] ** 2
