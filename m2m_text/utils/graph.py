@@ -44,7 +44,7 @@ def get_adj(b: np.ndarray, top_adj: Union[int, float]) -> np.ndarray:
     Returns:
         adj (np.ndarray): Adjacency matrix.
     """
-    adj = np.zeros_like(b)
+    adj = np.zeros_like(b, dtype=np.float32)
 
     if type(top_adj) == int:
         indices = np.argsort(b)[:, ::-1][:, :top_adj]
