@@ -224,7 +224,7 @@ class Readout(nn.Module):
 class GCNLayer(nn.Module):
     def __init__(
         self,
-        num_labels: int,
+        num_nodes: int,
         hidden_size: List[int],
         dropout: float,
         init_adj: Optional[torch.Tensor] = None,
@@ -235,7 +235,7 @@ class GCNLayer(nn.Module):
             GraphConvolution(in_s, out_s)
             for in_s, out_s in zip(hidden_size[:-1], hidden_size[1:])
         )
-        self.adj = nn.Parameter(torch.FloatTensor(num_labels, num_labels))
+        self.adj = nn.Parameter(torch.FloatTensor(num_nodes, num_nodes))
         self.dropout = nn.Dropout(dropout)
 
         if init_adj is not None:

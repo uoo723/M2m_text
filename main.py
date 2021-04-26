@@ -44,6 +44,7 @@ from m2m_text.networks import (
     LabelGCNAttentionRNN,
     LabelGCNAttentionRNNv2,
     LabelGCNAttentionRNNv3,
+    LabelGCNAttentionRNNv4,
     LaRoberta,
     LaRobertaV2,
     RobertaForSeqClassification,
@@ -73,6 +74,7 @@ MODEL_CLS = {
     "LabelGCNAttentionRNN": LabelGCNAttentionRNN,
     "LabelGCNAttentionRNNv2": LabelGCNAttentionRNNv2,
     "LabelGCNAttentionRNNv3": LabelGCNAttentionRNNv3,
+    "LabelGCNAttentionRNNv4": LabelGCNAttentionRNNv4,
 }
 
 TRANSFORMER_MODELS = ["Roberta", "LaRoberta", "LaRobertaV2"]
@@ -94,6 +96,7 @@ GCN_MODELS = [
     "LabelGCNAttentionRNN",
     "LabelGCNAttentionRNNv2",
     "LabelGCNAttentionRNNv3",
+    "LabelGCNAttentionRNNv4",
 ]
 
 

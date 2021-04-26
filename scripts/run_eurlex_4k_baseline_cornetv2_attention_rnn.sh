@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 
+export MLFLOW_TRACKING_URI=http://115.145.135.65:5050
+export MLFLOW_EXPERIMENT_NAME=Cornet
+
 args=(
     --model-cnf config/models/CornetAttentionRNNv2_EURLex-4K.yaml
     --data-cnf config/datasets/EURLex-4K.yaml
     --no-scheduler
-    --epoch 30
+    --run-script $0
+    --epoch 60
     --lr 1e-3
     # --eta-min 1e-5
     --train-batch-size 40
