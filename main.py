@@ -134,8 +134,9 @@ def load_model(
             lamda = model_cnf["model"].pop("lamda")
             top_adj = model_cnf["model"].pop("top_adj")
             use_b_weights = model_cnf["model"].pop("use_b_weights", False)
+            laplacian_norm = model_cnf["model"].pop("laplacian_norm", True)
             b = get_ease_weight(dataset, lamda)
-            adj = get_adj(b, top_adj, use_b_weights)
+            adj = get_adj(b, top_adj, use_b_weights, laplacian_norm)
 
             if verbose:
                 sparsity = np.count_nonzero(adj) / adj.shape[0] ** 2

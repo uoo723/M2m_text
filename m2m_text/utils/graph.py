@@ -36,6 +36,7 @@ def get_adj(
     b: np.ndarray,
     top_adj: Union[int, float],
     use_b_weights: bool = False,
+    laplacian_norm: bool = True,
 ) -> np.ndarray:
     """Get adjacency matrix from B matrix.
 
@@ -67,6 +68,6 @@ def get_adj(
     else:
         adj[indices] = 1
 
-    adj = csgraph.laplacian(adj, normed=True)
+    adj = csgraph.laplacian(adj, normed=laplacian_norm)
 
     return adj
