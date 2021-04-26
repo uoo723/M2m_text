@@ -918,3 +918,44 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         outputs = torch.cat([attn_out, gcn_out.expand(*repeat_vals)], dim=-1)
 
         return self.linear(outputs)
+
+
+class LabelGCNAttentionRNNv5(AttentionRNN):
+    def __init__(
+        self,
+        num_labels: int,
+        hidden_size: int,
+        linear_size: List[int],
+        label_emb_size: int,
+        gcn_hidden_size: List[int],
+        gcn_dropout: float,
+        gcn_init_adj: Optional[torch.Tensor] = None,
+        gcn_adj_trainable: bool = False,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            num_labels=num_labels,
+            hidden_size=hidden_size,
+            linear_size=linear_size,
+            *args,
+            **kwargs,
+        )
+
+        self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
+        nn.init.xavier_normal_(self.label_emb.data)
+
+        self.gcl = GCNLayer(
+            num_labels,
+            [label_emb_size] + gcn_hidden_size,
+            gcn_dropout,
+            gcn_init_adj,
+            gcn_adj_trainable,
+        )
+
+        self.linear2 = nn.Linear(num_labels, gcn_hidden_size[-1])
+
+    def forward(self, *args, **kwargs):
+        model_out = self.linear2(super().forward(*args, **kwargs))
+        gcn_out = self.gcl(self.label_emb)
+        return model_out @ gcn_out.transpose(1, 0)
