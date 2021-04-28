@@ -52,3 +52,13 @@ $ docker exec -it [cotainer_name] zsh  # Enter shell
 ```bash
 $ ./scripts/run_model.sh
 ```
+
+## MLflow Integration
+
+You can track experiments with mlflow.
+
+### Run MLflow UI
+
+```bash
+$ ./scripts/mlflow_ui.sh  # Enter http://[your-ip]:5000
+```

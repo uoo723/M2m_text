@@ -139,3 +139,6 @@ notebooks/
 
 # model checkpoint
 checkpoint/
+
+# mlflow
+mlruns/
