@@ -1,4 +1,4 @@
-name: AttentionRNN
+name: EaseAttentionRNN
 
 model:
   hidden_size: 256
@@ -8,13 +8,7 @@ model:
   max_length: 500
   emb_trainable: false
   emb_size: 300
+  lamda: 50
+  random_init: false
+  adj_trainable: false
   emb_init: data/EURLex4K/emb_init.npy  # EURLex-4K
-
-train:
-  input_opts:
-    return_attn: true
-  gen_input_opts:
-    pass_attn: true
-    rnn_training: true
-  last_input_opts:
-    pass_attn: true

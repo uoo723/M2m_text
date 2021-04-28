@@ -1,4 +1,4 @@
-name: LabelGCNAttentionRNNv4
+name: LabelGCNAttentionRNNv5
 
 model:
   hidden_size: 256
@@ -16,12 +16,3 @@ model:
   top_adj: 1e-4
   use_b_weights: true
   emb_init: data/EURLex4K/emb_init.npy  # EURLex-4K
-
-train:
-  input_opts:
-    return_attn: true
-  gen_input_opts:
-    pass_attn: true
-    rnn_training: true
-  last_input_opts:
-    pass_attn: true

@@ -1,0 +1,15 @@
+name: LabelGCNAttentionRNNv3
+
+model:
+  hidden_size: 256
+  num_layers: 1
+  linear_size: [256]
+  dropout: 0.5
+  emb_trainable: false
+  emb_size: 300
+  lamda: 500
+  random_init: false
+  gcn_hidden_size: [300, 300]
+  gcn_dropout: 0.3
+  top_adj: 0.02
+  use_b_weights: true

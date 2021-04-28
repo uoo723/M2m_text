@@ -45,7 +45,7 @@ from m2m_text.networks import (
     LabelGCNAttentionRNNv2,
     LabelGCNAttentionRNNv3,
     LabelGCNAttentionRNNv4,
-    LabelGCNAttentionRNNv5,
+    # LabelGCNAttentionRNNv5,
     LaRoberta,
     LaRobertaV2,
     RobertaForSeqClassification,
@@ -76,7 +76,7 @@ MODEL_CLS = {
     "LabelGCNAttentionRNNv2": LabelGCNAttentionRNNv2,
     "LabelGCNAttentionRNNv3": LabelGCNAttentionRNNv3,
     "LabelGCNAttentionRNNv4": LabelGCNAttentionRNNv4,
-    "LabelGCNAttentionRNNv5": LabelGCNAttentionRNNv5,
+    # "LabelGCNAttentionRNNv5": LabelGCNAttentionRNNv5,
 }
 
 TRANSFORMER_MODELS = ["Roberta", "LaRoberta", "LaRobertaV2"]
@@ -99,7 +99,7 @@ GCN_MODELS = [
     "LabelGCNAttentionRNNv2",
     "LabelGCNAttentionRNNv3",
     "LabelGCNAttentionRNNv4",
-    "LabelGCNAttentionRNNv5",
+    # "LabelGCNAttentionRNNv5",
 ]
 
 
@@ -120,11 +120,14 @@ def load_model(
     model_name: str,
     num_labels: int,
     model_cnf: dict,
+    data_cnf: dict,
     dataset: Optional[Dataset] = None,
     device: torch.device = torch.device("cpu"),
     verbose: bool = False,
 ):
     model_cnf = copy.deepcopy(model_cnf)
+
+    model_cnf["model"]["max_length"] = data_cnf["dataset"]["maxlen"]
 
     if model_name in TRANSFORMER_MODELS:
         pretrained_model_name = model_cnf["model"].pop("pretrained")
@@ -132,6 +135,8 @@ def load_model(
             pretrained_model_name, num_labels=num_labels, **model_cnf["model"]
         )
     else:
+        model_cnf["model"]["emb_init"] = data_cnf["model"]["emb_init"]
+
         if model_name == "EaseAttentionRNN":
             model_cnf["model"]["dataset"] = dataset
             model_cnf["model"]["device"] = device
@@ -208,9 +213,6 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 @click.option("--ckpt-name", type=click.STRING, help="Checkpoint name")
 @click.option("--net-t", type=click.STRING, help="Checkpoint path of training network")
 @click.option(
-    "--net-g", type=click.STRING, help="Checkpoint path of generation network"
-)
-@click.option(
     "--num-workers", type=click.INT, default=4, help="Number of workers for data loader"
 )
 @click.option("--no-cuda", is_flag=True, default=False, help="Disable cuda")
@@ -220,7 +222,6 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 @click.option(
     "--test-batch-size", type=click.INT, default=256, help="Batch size for test"
 )
-@click.option("--gen", is_flag=True, default=False, help="Enable Data generation")
 @click.option("--decay", type=click.FLOAT, default=2e-4, help="Weight decay")
 @click.option("--lr", type=click.FLOAT, default=0.1, help="learning rate")
 @click.option(
@@ -230,33 +231,6 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     help="Minimum learning rate for cosine annealing scheduler",
 )
 @click.option("--no-scheduler", is_flag=True, default=False, help="Disable scheduler")
-@click.option(
-    "--step-size", type=click.FLOAT, default=0.1, help="Step size in generation"
-)
-@click.option(
-    "--beta",
-    type=click.FLOAT,
-    default=0.999,
-    help="Hyper parameter for rejection/sampling",
-)
-@click.option(
-    "--lam",
-    type=click.FLOAT,
-    default=0.5,
-    help="Hyper paramter for regularization of translation",
-)
-@click.option(
-    "--gamma", type=click.FLOAT, default=0.99, help="Threshold of the generation"
-)
-@click.option(
-    "--attack-iter",
-    type=click.INT,
-    default=10,
-    help="Attack iteration to generation synthetic sample",
-)
-@click.option(
-    "--warm", type=click.INT, default=160, help="Deferred stragtegy for re-balancing"
-)
 @click.option("--epoch", type=click.INT, default=200, help="Total number of epochs")
 @click.option(
     "--swa-warmup", type=click.INT, default=10, help="Warmup for SWA. Disable: -1"
@@ -265,13 +239,6 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     "--gradient-max-norm",
     type=click.FLOAT,
     help="max norm for gradient clipping",
-)
-@click.option("--no-over", is_flag=True, default=False, help="Disable over-sampling")
-@click.option(
-    "--no-over-gen",
-    is_flag=True,
-    default=False,
-    help="Disable over-sampling at generation phase",
 )
 @click.option(
     "--eval-step",
@@ -287,68 +254,9 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 )
 @click.option(
     "--early-criterion",
-    type=click.Choice(
-        ["acc", "bal_acc", "p1", "p3", "p5", "n1", "n3", "n5", "psp1", "psp3", "psp5"]
-    ),
-    default="bal_acc",
+    type=click.Choice(["p1", "p3", "p5", "n1", "n3", "n5", "psp1", "psp3", "psp5"]),
+    default="n5",
     help="Early stopping criterion",
-)
-@click.option(
-    "--no-random-start",
-    is_flag=True,
-    default=False,
-    help="Disable random start for M2m",
-)
-@click.option(
-    "--perturb-attack",
-    type=click.Choice(["l2", "inf", "none"]),
-    default="l2",
-    help="Attack type for random perturbation",
-)
-@click.option(
-    "--perturb-eps",
-    type=click.FLOAT,
-    default=0.5,
-    help="Epsilon for random perturbation",
-)
-@click.option(
-    "--step-attack",
-    type=click.Choice(["l2", "inf"]),
-    default="inf",
-    help="Attack type for step phase",
-)
-@click.option(
-    "--max-n-labels",
-    type=click.INT,
-    default=5,
-    help="Maximum number of labels to be generated for multi-label dataset",
-)
-@click.option(
-    "--sim-threshold",
-    type=click.FLOAT,
-    default=0.7,
-    help="Similarity threshold to select adjacent labels for multi-label datasets",
-)
-@click.option(
-    "--mixup-enabled",
-    is_flag=True,
-    default=False,
-    help="Enable mixup",
-)
-@click.option(
-    "--stacked-mixup-enabled",
-    is_flag=True,
-    default=False,
-    help="Enable stacked-mixup",
-)
-@click.option(
-    "--double-mixup-enabled",
-    is_flag=True,
-    default=False,
-    help="Enable double-mixup",
-)
-@click.option(
-    "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
 )
 def main(
     mode,
@@ -361,40 +269,20 @@ def main(
     ckpt_root_path,
     ckpt_name,
     net_t,
-    net_g,
     num_workers,
     no_cuda,
     train_batch_size,
     test_batch_size,
-    gen,
     decay,
     lr,
     eta_min,
     no_scheduler,
-    step_size,
-    beta,
-    lam,
-    gamma,
-    attack_iter,
-    warm,
     epoch,
     swa_warmup,
     gradient_max_norm,
-    no_over,
-    no_over_gen,
     eval_step,
     early,
     early_criterion,
-    no_random_start,
-    perturb_attack,
-    perturb_eps,
-    step_attack,
-    max_n_labels,
-    sim_threshold,
-    mixup_enabled,
-    stacked_mixup_enabled,
-    double_mixup_enabled,
-    mixup_alpha,
 ):
     yaml = YAML(typ="safe")
 
@@ -435,7 +323,9 @@ def main(
     logger.info(f"Dataset: {dataset_name}")
 
     train_dataset, valid_dataset = DATASET_CLS[dataset_name].splits(
-        test_size=data_cnf.get("valid_size", 200), **data_cnf["dataset"]
+        test_size=data_cnf.get("valid_size", 200),
+        **data_cnf["dataset"],
+        **model_cnf.get("dataset", {}),
     )
 
     with warnings.catch_warnings():
@@ -445,35 +335,18 @@ def main(
     le = get_le(train_dataset.le_path)
     num_labels = len(le.classes_)
 
-    if type(train_dataset.y) == csr_matrix:
-        y = sp.vstack([train_dataset.y, valid_dataset.y])
-    else:
-        y = np.concatenate([train_dataset.y, valid_dataset.y])
-
-    n_samples_per_class = get_n_samples_per_class(y)
-
     logger.info(f"# of train dataset: {len(train_dataset):,}")
     logger.info(f"# of valid dataset: {len(valid_dataset):,}")
     logger.info(f"# of test dataset: {len(test_dataset):,}")
     logger.info(f"# of classes: {num_labels:,}")
 
-    if not no_over:
-        train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
-        train_loader = DataLoader(
-            train_dataset,
-            num_workers=num_workers,
-            sampler=WeightedRandomSampler(train_weights, len(train_weights)),
-            pin_memory=False if no_cuda else True,
-            batch_size=train_batch_size,
-        )
-    else:
-        train_loader = DataLoader(
-            train_dataset,
-            num_workers=num_workers,
-            shuffle=True,
-            pin_memory=False if no_cuda else True,
-            batch_size=train_batch_size,
-        )
+    train_loader = DataLoader(
+        train_dataset,
+        num_workers=num_workers,
+        shuffle=True,
+        pin_memory=False if no_cuda else True,
+        batch_size=train_batch_size,
+    )
 
     valid_loader = DataLoader(
         valid_dataset,
@@ -496,23 +369,14 @@ def main(
     logger.info(f"Model: {model_name}")
 
     network = load_model(
-        model_name, num_labels, model_cnf, train_dataset, device, verbose=True
+        model_name, num_labels, model_cnf, data_cnf, train_dataset, device, verbose=True
     )
 
     network.to(device)
 
-    if net_g:
-        network_g = load_model(model_name, num_labels, model_cnf, verbose=True)
-        load_checkpoint(net_g, network_g, set_rng_state=False)
-        network_g.to(device)
-    else:
-        network_g = None
-
     if num_gpus > 1 and not no_cuda:
         logger.info(f"Multi-GPU mode: {num_gpus} GPUs")
         network = nn.DataParallel(network)
-        if network_g is not None:
-            network_g = nn.DataParallel(network_g)
     elif not no_cuda:
         logger.info("Single-GPU mode")
     else:
@@ -540,26 +404,6 @@ def main(
             start_epoch = 0
             other_states = {}
 
-        if net_g:
-            # if isinstance(network, nn.DataParallel):
-            #     network.module.emb.emb.weight.data = network_g.module.emb.emb.weight.data
-            # else:
-            #     network.emb.emb.weight.data = network_g.emb.emb.weight.data
-
-            if not no_over_gen:
-                train_weights = get_oversampled_data(train_dataset, n_samples_per_class)
-                train_over_loader = DataLoader(
-                    train_dataset,
-                    sampler=WeightedRandomSampler(train_weights, len(train_weights)),
-                    num_workers=num_workers,
-                    pin_memory=False if no_cuda else True,
-                    batch_size=train_batch_size,
-                )
-            else:
-                train_over_loader = None
-        else:
-            train_over_loader = None
-
         logger.info("Training")
 
         train(
@@ -568,42 +412,20 @@ def main(
             test_run,
             start_epoch,
             epoch,
-            lr,
             optimizer,
             scheduler,
             criteron,
             swa_warmup,
             gradient_max_norm,
             train_loader,
-            train_over_loader,
             valid_loader,
-            num_labels,
-            n_samples_per_class,
-            warm,
-            gen,
             ckpt_path,
-            beta,
-            lam,
-            step_size,
-            attack_iter,
             other_states=other_states,
-            gamma=gamma,
-            random_start=not no_random_start,
-            model_seed=network_g,
             step=eval_step,
             early=early,
             early_criterion=early_criterion,
             is_transformer=is_transformer,
-            perturb_attack=perturb_attack,
-            perturb_eps=perturb_eps,
-            step_attack=step_attack,
             multi_label=multi_label,
-            max_n_labels=max_n_labels,
-            sim_threshold=sim_threshold,
-            mixup_enabled=mixup_enabled,
-            stacked_mixup_enabled=stacked_mixup_enabled,
-            double_mixup_enabled=double_mixup_enabled,
-            mixup_alpha=mixup_alpha,
             **model_cnf.get("train", {}),
         )
     ##################################################################################
