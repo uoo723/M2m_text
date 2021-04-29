@@ -8,6 +8,7 @@ Created on 2020/12/31
 from itertools import combinations
 from typing import List, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -881,6 +882,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         gcn_dropout: float,
         gcn_init_adj: Optional[torch.Tensor] = None,
         gcn_adj_trainable: bool = False,
+        label_emb_init: Optional[np.ndarray] = None,
         *args,
         **kwargs,
     ):
@@ -892,8 +894,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             **kwargs,
         )
 
-        self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
-        nn.init.xavier_normal_(self.label_emb.data)
+        self.init_label_emb(num_labels, label_emb_size, label_emb_init)
 
         self.gcl = GCNLayer(
             num_labels,
@@ -904,6 +905,18 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         )
 
         self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
+
+    def init_label_emb(self, num_labels, label_emb_size, label_emb_init):
+        self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
+
+        if label_emb_init is not None:
+            assert (
+                label_emb_init.shape[1] == label_emb_size
+            ), "Mismatching of dimension of label embedding"
+
+            self.label_emb.data = torch.from_numpy(label_emb_init).float()
+        else:
+            nn.init.xavier_normal_(self.label_emb.data)
 
     def forward(self, *args, **kwargs):
         attn_out = super().forward(return_attn=True, *args, **kwargs)[0]

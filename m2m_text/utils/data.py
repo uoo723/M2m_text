@@ -9,6 +9,7 @@ from typing import Iterable, Optional, Union
 
 import joblib
 import numpy as np
+from typing import Union
 import scipy.sparse as sp
 from gensim.models import KeyedVectors
 from scipy.sparse import csc_matrix, csr_matrix
@@ -113,6 +114,29 @@ def get_label_features(
     sparse_y: csr_matrix,
 ) -> csr_matrix:
     return normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x))
+
+
+def get_dense_label_features(
+    emb_init: Union[str, np.ndarray], train_x: np.ndarray, train_y: csr_matrix
+) -> np.ndarray:
+    if type(emb_init) == str:
+        emb_init = np.load(emb_init)
+
+    labels_f = np.zeros((train_y.shape[1], emb_init.shape[1]))
+    labels_cnt = np.zeros(train_y.shape[1], np.int64)
+
+    for i, labels in enumerate(train_y):
+        indices = np.argwhere(labels == 1)[:, 1]
+        for index in indices:
+            word_cnt = np.count_nonzero(train_x[i])
+            x_indices = np.where(train_x[i] != 0)[0]
+            labels_f[index] += np.sum(emb_init[train_x[i][x_indices]], axis=0)
+            labels_cnt[index] += word_cnt
+
+    labels_cnt[labels_cnt == 0] = 1
+
+    labels_f = labels_f / labels_cnt[:, None]
+    return labels_f
 
 
 def get_emb_init(

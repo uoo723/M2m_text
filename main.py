@@ -53,6 +53,7 @@ from m2m_text.networks import (
 from m2m_text.optimizers import DenseSparseAdam
 from m2m_text.train import evaluate, train
 from m2m_text.utils.data import (
+    get_dense_label_features,
     get_le,
     get_mlb,
     get_n_samples_per_class,
@@ -148,6 +149,13 @@ def load_model(
             laplacian_norm = model_cnf["model"].pop("laplacian_norm", True)
             b = get_ease_weight(dataset, lamda)
             adj = get_adj(b, top_adj, use_b_weights, laplacian_norm)
+
+            if model_cnf["model"].pop("label_emb_init", False):
+                if verbose:
+                    logger.info("Get label embeddings")
+                model_cnf["model"]["label_emb_init"] = get_dense_label_features(
+                    dataset.emb_init_path, dataset.x, dataset.y
+                )
 
             if verbose:
                 sparsity = np.count_nonzero(adj) / adj.shape[0] ** 2
