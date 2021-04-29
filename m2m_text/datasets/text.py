@@ -544,6 +544,24 @@ class AmazonCat(TextDataset):
         self.labels = y
 
 
+class AmazonCat13K(AmazonCat):
+    base_folder = "AmazonCat13K"
+
+    url = "https://drive.google.com/uc?id=1ihYlQQMux8RjFIuSOPLaBuFY7WBBfeAa"
+
+    filename = "AmazonCat13K.tar.gz"
+    tgz_md5 = "195af83547732ad316846807055d5938"
+
+    file_list = [
+        ("train_raw.npz", "ffa2d3256397c3fca23fe02fdea381de"),
+        ("test_raw.npz", "f379c2fa4cc3b891845904eaf45a7d16"),
+    ]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+
 class Wiki10(TextDataset):
     """`Wiki10 Dataset.`
 
@@ -626,3 +644,21 @@ class Wiki10(TextDataset):
     @y.setter
     def y(self, y):
         self.labels = y
+
+
+class Wiki10_31K(Wiki10):
+    base_folder = "Wiki10-31K"
+
+    url = "https://drive.google.com/uc?id=1PQ0_BM6Zrn_UG7atXrLxfRQBYLylZDjK"
+
+    filename = "Wiki10-31K.tar.gz"
+    tgz_md5 = "aa378f3469831664f0cd223c5de35004"
+
+    file_list = [
+        ("train_raw.npz", "7295000dae7ba078a9dcd3ce2ab2f19c"),
+        ("test_raw.npz", "991d6afc06a4fa57a48ff3d8e4355f3a"),
+    ]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)

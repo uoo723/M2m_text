@@ -5,3 +5,6 @@ valid_size: 0.2
 dataset:
   maxlen: 200
   label_encoder_filename: label_encoder
+
+model:
+  emb_init: data/AmazonCat/emb_init.npy

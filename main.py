@@ -25,12 +25,14 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from m2m_text.datasets import (
     RCV1,
     AmazonCat,
+    AmazonCat13K,
     DrugReview,
     DrugReviewSmall,
     DrugReviewSmallv2,
     EURLex,
     EURLex4K,
     Wiki10,
+    Wiki10_31K,
 )
 from m2m_text.datasets._base import Dataset
 from m2m_text.metrics import get_inv_propensity
@@ -91,6 +93,8 @@ DATASET_CLS = {
     "EURLex4K": EURLex4K,
     "AmazonCat": AmazonCat,
     "Wiki10": Wiki10,
+    "AmazonCat13K": AmazonCat13K,
+    "Wiki10_31K": Wiki10_31K,
 }
 
 MULTI_LABEL_DATASETS = ["EURLex", "EURLex4K", "AmazonCat", "Wiki10"]

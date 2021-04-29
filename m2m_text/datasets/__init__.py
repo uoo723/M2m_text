@@ -5,12 +5,14 @@ Created on 2021/01/08
 from .sparse import RCV1
 from .text import (
     AmazonCat,
+    AmazonCat13K,
     DrugReview,
     DrugReviewSmall,
     DrugReviewSmallv2,
     EURLex,
     EURLex4K,
     Wiki10,
+    Wiki10_31K,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "EURLex",
     "AmazonCat",
     "Wiki10",
+    "AmazonCat13K",
+    "Wiki10_31K",
 ]

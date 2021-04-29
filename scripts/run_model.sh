@@ -4,11 +4,15 @@
 # export MLFLOW_EXPERIMENT_NAME=Cornet
 
 DATASET=EURLex-4K
+# DATASET=AmazonCat13K
+# DATASET=Wiki1-31K
+# DATASET=AmazonCat-1000
+# DATASET=Wiki10-3000
 
-# MODEL=AttentionRNN
+MODEL=AttentionRNN
 # MODEL=CornetAttentionRNNv2
 # MODEL=LabelGCNAttentionRNN
-MODEL=LabelGCNAttentionRNNv2
+# MODEL=LabelGCNAttentionRNNv2
 # MODEL=LabelGCNAttentionRNNv3
 # MODEL=LabelGCNAttentionRNNv4
 
@@ -29,7 +33,7 @@ args=(
     --swa-warmup 10
     --eval-step 100
     --early 50
-    # --net-t ./checkpoint/top_adj_0.02_lambda_200_LabelGCNAttentionRNNv2_EURLex4K_1240_last.pt
+    # --net-t ./checkpoint/label_emb_init_LabelGCNAttentionRNNv4_EURLex4K_1240_last.pt
 )
 
 python main.py "${args[@]}"
