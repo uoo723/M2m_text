@@ -228,7 +228,7 @@ class GCNLayer(nn.Module):
         hidden_size: List[int],
         dropout: float,
         init_adj: Optional[torch.Tensor] = None,
-        adj_trainable: bool = True,
+        adj_trainable: bool = False,
     ):
         super(GCNLayer, self).__init__()
         self.gc = nn.ModuleList(
