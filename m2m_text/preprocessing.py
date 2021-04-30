@@ -7,6 +7,7 @@ from typing import Callable, Iterable, Optional, Union
 
 import numpy as np
 from gensim.models import KeyedVectors
+from joblib import Parallel, delayed
 from logzero import logger
 from nltk.tokenize import word_tokenize
 from sklearn import preprocessing
@@ -158,6 +159,7 @@ def tokenize(
     texts: Iterable[str],
     tokenizer: Callable = word_tokenize,
     lower: bool = True,
+    num_cores: int = 1,
 ) -> Iterable[Iterable[str]]:
     """Tokenize texts.
 
@@ -165,6 +167,7 @@ def tokenize(
         texts: Iterable[str],
         tokenizer (func): Tokenizer. default nltk.tokenize.word_tokenize
         lower (bool): Lower text. default: True
+        num_cores (int): Number of cores to use for preprocessing.
 
     Returns:
         tokenized (iter[iter[str]]): List of tokenized texts.
@@ -174,9 +177,14 @@ def tokenize(
     nltk.download("punkt", quiet=True)
 
     logger.info("Tokenizing texts.")
-    tokenized_texts = []
-    for text in tqdm(texts, desc="Tokenizing"):
-        text = text.lower() if lower else text
-        tokenized_texts.append(tokenizer(text))
+    tokenized_texts = Parallel(n_jobs=num_cores)(
+        delayed(_tokenize_single)(text, tokenizer, lower)
+        for text in tqdm(texts, desc="Tokenizing")
+    )
 
     return tokenized_texts
+
+
+def _tokenize_single(text: str, tokenizer: Callable, lower: bool):
+    text = text.lower() if lower else text
+    return tokenizer(text)

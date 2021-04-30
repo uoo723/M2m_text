@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from logzero import logger
 from scipy.sparse import csr_matrix
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -49,6 +50,7 @@ class TextDataset(Dataset):
         unknwon (str): Unknwon token.
         tokenizer_model_name (str, optional): bert tokenizer model name.
         multi_label (bool): Set true if y is multi label.
+        num_cores (int): Number of cores to use for preprocessing.
     """
 
     def __init__(
@@ -62,6 +64,9 @@ class TextDataset(Dataset):
         unknown: str = "<UNK>",
         tokenizer_model_name: Optional[str] = None,
         multi_label: bool = False,
+        num_cores: int = 1,
+        bert_preprocess_batch_size: int = 1000,
+        verbose: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -81,6 +86,9 @@ class TextDataset(Dataset):
         self.maxlen = maxlen
         self.tokenizer_model_name = tokenizer_model_name
         self.get_le = get_mlb if multi_label else get_le
+        self.num_cores = num_cores
+        self.bert_preprocess_batch_size = bert_preprocess_batch_size
+        self.verbose = verbose
 
     def download_w2v_model(self, quiet: bool = False) -> None:
         """Download w2v model
@@ -104,6 +112,9 @@ class TextDataset(Dataset):
             extract_archive(fpath)
 
     def load_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        if self.verbose:
+            logger.info("Load dataset")
+
         train_npz_path = os.path.join(self.data_dir, self.train_npz)
         npz_path = os.path.join(
             self.data_dir, self.train_npz if self.train else self.test_npz
@@ -145,16 +156,27 @@ class TextDataset(Dataset):
 
             input_ids = []
             attention_mask = []
-            for text in tqdm(texts, desc="Tokenizing"):
-                inputs = tokenizer(
-                    text,
-                    truncation=True,
-                    padding="max_length",
-                    return_tensors="np",
-                    max_length=self.maxlen,
-                )
-                input_ids.append(inputs["input_ids"])
-                attention_mask.append(inputs["attention_mask"])
+
+            with tqdm(total=len(texts), desc="Tokenizing") as pbar:
+                start = 0
+                end = self.bert_preprocess_batch_size
+
+                while start < len(texts):
+                    batch_texts = texts[start:end]
+                    inputs = tokenizer(
+                            batch_texts.tolist(),
+                            truncation=True,
+                            padding="max_length",
+                            return_tensors="np",
+                            max_length=self.maxlen,
+                        )
+
+                    input_ids.append(inputs['input_ids'])
+                    attention_mask.append(inputs['attention_mask'])
+                    pbar.update(len(batch_texts))
+
+                    start = end
+                    end = start + self.bert_preprocess_batch_size
 
             input_ids = np.concatenate(input_ids)
             attention_mask = np.concatenate(attention_mask)
@@ -180,7 +202,9 @@ class TextDataset(Dataset):
                 texts, labels = npz["texts"], npz["labels"]
         else:
             texts, labels = self.raw_data()
-            tokenized_texts = get_tokenized_texts(self.tokenized_path, texts)
+            tokenized_texts = get_tokenized_texts(
+                self.tokenized_path, texts, self.num_cores
+            )
             vocab = get_vocab(
                 self.vocab_path,
                 tokenized_texts,
@@ -220,7 +244,9 @@ class TextDataset(Dataset):
         """Return sparse (tf-idf) features."""
         if not os.path.isfile(self.sparse_path):
             texts = None if os.path.isfile(self.tokenized_path) else self.raw_data()[0]
-            tokenized_texts = get_tokenized_texts(self.tokenized_path, texts)
+            tokenized_texts = get_tokenized_texts(
+                self.tokenized_path, texts, self.num_cores
+            )
         else:
             tokenized_texts = None
 

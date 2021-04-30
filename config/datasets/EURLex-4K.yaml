@@ -5,6 +5,7 @@ valid_size: 0.2
 dataset:
   maxlen: 500
   label_encoder_filename: label_encoder
+  num_cores: -1
 
 model:
   emb_init: data/EURLex4K/emb_init.npy

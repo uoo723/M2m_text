@@ -75,13 +75,16 @@ def get_mlb(
 
 
 def get_tokenized_texts(
-    tokenized_path: str, texts: Optional[Iterable[str]] = None, force: bool = False
+    tokenized_path: str,
+    texts: Optional[Iterable[str]] = None,
+    num_cores: int = 1,
+    force: bool = False,
 ) -> Iterable[Iterable[str]]:
     if os.path.isfile(tokenized_path) and not force:
         with open(tokenized_path, "rb") as f:
             return pickle.load(f)
 
-    tokenized_texts = tokenize(texts)
+    tokenized_texts = tokenize(texts, num_cores=num_cores)
     with open(tokenized_path, "wb") as f:
         pickle.dump(tokenized_texts, f)
 
