@@ -13,6 +13,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class Identity(nn.Module):
+    def forward(self, inputs):
+        return inputs
+
+
 class Embedding(nn.Module):
     def __init__(
         self,
@@ -229,6 +234,7 @@ class GCNLayer(nn.Module):
         dropout: float,
         init_adj: Optional[torch.Tensor] = None,
         adj_trainable: bool = False,
+        gcn_adj_dropout: Optional[float] = None,
     ):
         super(GCNLayer, self).__init__()
         self.gc = nn.ModuleList(
@@ -245,10 +251,15 @@ class GCNLayer(nn.Module):
 
         self.adj.requires_grad = adj_trainable
 
+        if gcn_adj_dropout is not None:
+            self.gcn_adj_dropout = nn.Dropout(gcn_adj_dropout)
+        else:
+            self.gcn_adj_dropout = Identity()
+
     def forward(self, inputs):
         outputs = inputs
         for layer in self.gc:
-            outputs = F.relu(layer(outputs, self.adj))
+            outputs = F.relu(layer(outputs, self.gcn_adj_dropout(self.adj)))
             outputs = self.dropout(outputs)
 
         return outputs

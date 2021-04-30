@@ -882,6 +882,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         gcn_dropout: float,
         gcn_init_adj: Optional[torch.Tensor] = None,
         gcn_adj_trainable: bool = False,
+        gcn_adj_dropout: Optional[float] = None,
         label_emb_init: Optional[np.ndarray] = None,
         *args,
         **kwargs,
@@ -902,6 +903,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             gcn_dropout,
             gcn_init_adj,
             gcn_adj_trainable,
+            gcn_adj_dropout,
         )
 
         self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
