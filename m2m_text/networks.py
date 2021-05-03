@@ -8,10 +8,13 @@ Created on 2020/12/31
 from itertools import combinations
 from typing import List, Optional
 
+import dgl
 import numpy as np
+import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dgl.nn.pytorch import GATConv
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.roberta.modeling_roberta import (
@@ -889,6 +892,8 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         gcn_adj_trainable: bool = False,
         gcn_adj_dropout: Optional[float] = None,
         label_emb_init: Optional[np.ndarray] = None,
+        use_gat: bool = False,
+        gat_num_heads: int = 3,
         *args,
         **kwargs,
     ):
@@ -902,14 +907,31 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
 
         self.init_label_emb(num_labels, label_emb_size, label_emb_init)
 
-        self.gcl = GCNLayer(
-            num_labels,
-            [label_emb_size] + gcn_hidden_size,
-            gcn_dropout,
-            gcn_init_adj,
-            gcn_adj_trainable,
-            gcn_adj_dropout,
-        )
+        if use_gat:
+            assert gcn_init_adj is not None, "gcn_init_adj must be set when use GAT."
+            gcl_hidden_size = [label_emb_size] + gcn_hidden_size
+            g = dgl.from_scipy(sp.csr_matrix(gcn_init_adj.numpy()))
+            self.g = dgl.add_self_loop(g)
+            self.gcl = nn.ModuleList(
+                GATConv(
+                    in_s,
+                    out_s,
+                    gat_num_heads,
+                    feat_drop=gcn_dropout,
+                    residual=True,
+                    activation=F.relu,
+                )
+                for in_s, out_s in zip(gcl_hidden_size[:-1], gcl_hidden_size[1:])
+            )
+        else:
+            self.gcl = GCNLayer(
+                num_labels,
+                [label_emb_size] + gcn_hidden_size,
+                gcn_dropout,
+                gcn_init_adj,
+                gcn_adj_trainable,
+                gcn_adj_dropout,
+            )
 
         self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
 
@@ -927,7 +949,18 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
 
     def forward(self, *args, **kwargs):
         attn_out = super().forward(return_attn=True, *args, **kwargs)[0]
-        gcn_out = self.gcl(self.label_emb).unsqueeze(0)
+
+        if isinstance(self.gcl, nn.ModuleList):
+            gcn_out = self.label_emb
+            if attn_out.device != self.g:
+                self.g = self.g.to(attn_out.device)
+
+            for gcl in self.gcl:
+                gcn_out = gcl(self.g, gcn_out).mean(dim=1)
+
+            gcn_out.unsqueeze_(0)
+        else:
+            gcn_out = self.gcl(self.label_emb).unsqueeze(0)
 
         repeat_vals = [attn_out.shape[0] // gcn_out.shape[0]] + [-1] * (
             len(gcn_out.shape) - 1
