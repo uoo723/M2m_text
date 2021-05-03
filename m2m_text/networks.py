@@ -894,6 +894,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         label_emb_init: Optional[np.ndarray] = None,
         use_gat: bool = False,
         gat_num_heads: int = 3,
+        enable_gating: bool = False,
         *args,
         **kwargs,
     ):
@@ -904,6 +905,8 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             *args,
             **kwargs,
         )
+
+        self.enable_gating = enable_gating
 
         self.init_label_emb(num_labels, label_emb_size, label_emb_init)
 
@@ -934,7 +937,15 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
                 gcn_adj_dropout,
             )
 
-        self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
+        if enable_gating:
+            assert (
+                gcn_hidden_size[-1] == hidden_size * 2
+            ), "Last hidden size of GCN and first hidden size of MLP must be same."
+            self.gate = nn.Linear(hidden_size * 4, 2, bias=False)
+            nn.init.xavier_normal_(self.gate.weight)
+        else:
+            self.register_parameter("gate", None)
+            self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
 
     def init_label_emb(self, num_labels, label_emb_size, label_emb_init):
         self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
@@ -959,7 +970,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             for gcl in self.gcl:
                 gcn_out = gcl(self.g, gcn_out).mean(dim=1)
 
-            gcn_out.unsqueeze_(0)
+            gcn_out = gcn_out.unsqueeze(0)
         else:
             gcn_out = self.gcl(self.label_emb).unsqueeze(0)
 
@@ -967,7 +978,19 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             len(gcn_out.shape) - 1
         )
 
-        outputs = torch.cat([attn_out, gcn_out.expand(*repeat_vals)], dim=-1)
+        gcn_out = gcn_out.expand(*repeat_vals)
+
+        if self.enable_gating:
+            weights = F.softmax(
+                self.gate(torch.cat([attn_out, gcn_out], dim=-1)), dim=-1
+            )
+            weights = weights.transpose(2, 1)
+            outputs = (
+                weights[:, 0, :].unsqueeze(-1) * attn_out
+                + weights[:, 1, :].unsqueeze(-1) * gcn_out
+            )
+        else:
+            outputs = torch.cat([attn_out, gcn_out], dim=-1)
 
         return self.linear(outputs)
 
