@@ -197,7 +197,8 @@ def train(
                 log_msg += f"early stop: {e} "
                 log_msg += f"p@5: {results['p5']:.4f} "
                 log_msg += f"n@5: {results['n5']:.4f} "
-                log_msg += f"psp@5: {results['psp5']:.4f}"
+                log_msg += f"psp@5: {results['psp5']:.4f} "
+                log_msg += f"psn@5: {results['psn5']:.4f}"
 
                 logger.info(log_msg)
 
@@ -269,6 +270,7 @@ def evaluate(
             f"\np@1,3,5: {results['p1']:.4f}, {results['p3']:.4f}, {results['p5']:.4f}"
             f"\nn@1,3,5: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}"
             f"\npsp@1,3,5: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}"
+            f"\npsn@1,3,5: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}"
         )
 
         log_metric(results, test_run=test_run)

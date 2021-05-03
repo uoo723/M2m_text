@@ -910,7 +910,7 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         if use_gat:
             assert gcn_init_adj is not None, "gcn_init_adj must be set when use GAT."
             gcl_hidden_size = [label_emb_size] + gcn_hidden_size
-            g = dgl.from_scipy(sp.csr_matrix(gcn_init_adj.numpy()))
+            self.g = dgl.from_scipy(sp.csr_matrix(gcn_init_adj.numpy()))
             # self.g = dgl.add_self_loop(g)
             self.gcl = nn.ModuleList(
                 GATConv(

@@ -65,6 +65,10 @@ def get_precision_results(
         psp3 = get_psp_3(prediction, targets, inv_w, mlb)
         psp5 = get_psp_5(prediction, targets, inv_w, mlb)
 
+        psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
+        psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
+        psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
+
     return {
         "p1": p1,
         "p3": p3,
@@ -75,6 +79,9 @@ def get_precision_results(
         "psp1": psp1,
         "psp3": psp3,
         "psp5": psp5,
+        "psn1": psn1,
+        "psn3": psn3,
+        "psn5": psn5,
     }
 
 
