@@ -15,6 +15,7 @@ MODEL=AttentionRNN
 # MODEL=LabelGCNAttentionRNNv2
 # MODEL=LabelGCNAttentionRNNv3
 # MODEL=LabelGCNAttentionRNNv4
+# MODEL=EaseAttentionRNN
 
 args=(
     --model-cnf config/models/$MODEL.yaml

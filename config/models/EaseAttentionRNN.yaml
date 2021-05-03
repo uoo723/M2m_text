@@ -8,7 +8,6 @@ model:
   max_length: 500
   emb_trainable: false
   emb_size: 300
-  lamda: 50
+  lamda: 500
   random_init: false
   adj_trainable: false
-  emb_init: data/EURLex4K/emb_init.npy  # EURLex-4K

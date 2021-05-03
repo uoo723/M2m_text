@@ -704,22 +704,22 @@ class EaseAttentionRNN(AttentionRNN):
         self,
         num_labels: int,
         dataset: Dataset,
-        device: torch.device = torch.device("cpu"),
         lamda: float = 50,
         random_init: bool = True,
         adj_trainable: bool = True,
+        add_skip_connection: bool = True,
         *args,
         **kwargs,
     ):
         super().__init__(num_labels=num_labels, *args, **kwargs)
         self.B = nn.Linear(num_labels, num_labels, bias=False)
+        self.add_skip_connection = add_skip_connection
 
         if random_init:
             nn.init.xavier_uniform_(self.B.weight)
         else:
             B = get_ease_weight(dataset, lamda)
             self.B.weight.data = torch.from_numpy(B).float()
-            # self.B = torch.from_numpy(B).float().to(device)
 
         self.B.requires_grad_ = adj_trainable
 
@@ -728,8 +728,13 @@ class EaseAttentionRNN(AttentionRNN):
         if type(ret) == tuple:
             return ret
 
-        return self.B(ret)
-        # return ret
+        outputs = self.B(ret)
+
+        if self.add_skip_connection:
+            outputs = F.relu(outputs)
+            outputs = outputs + ret
+
+        return outputs
 
 
 class LabelGCNAttentionRNN(AttentionRNN):
