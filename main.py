@@ -61,7 +61,7 @@ from m2m_text.utils.data import (
     get_n_samples_per_class,
     get_oversampled_data,
 )
-from m2m_text.utils.graph import get_adj, get_ease_weight
+from m2m_text.utils.graph import get_adj, get_ease_weight, get_random_adj
 from m2m_text.utils.mlflow import log_ckpt, log_config, log_logfile, log_metric, log_tag
 from m2m_text.utils.model import load_checkpoint
 
@@ -147,12 +147,16 @@ def load_model(
             model_cnf["model"]["device"] = device
 
         if model_name in GCN_MODELS:
-            lamda = model_cnf["model"].pop("lamda")
-            top_adj = model_cnf["model"].pop("top_adj")
-            use_b_weights = model_cnf["model"].pop("use_b_weights", False)
-            laplacian_norm = model_cnf["model"].pop("laplacian_norm", True)
-            b = get_ease_weight(dataset, lamda)
-            adj = get_adj(b, top_adj, use_b_weights, laplacian_norm)
+            random_adj_init_sp = model_cnf.pop("random_adj_init_sp", None)
+            if random_adj_init_sp is not None:
+                adj = get_random_adj(num_labels, random_adj_init_sp)
+            else:
+                lamda = model_cnf["model"].pop("lamda")
+                top_adj = model_cnf["model"].pop("top_adj")
+                use_b_weights = model_cnf["model"].pop("use_b_weights", False)
+                laplacian_norm = model_cnf["model"].pop("laplacian_norm", True)
+                b = get_ease_weight(dataset, lamda)
+                adj = get_adj(b, top_adj, use_b_weights, laplacian_norm)
 
             if model_cnf["model"].pop("label_emb_init", False):
                 if verbose:

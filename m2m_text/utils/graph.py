@@ -42,9 +42,12 @@ def get_adj(
 
     Args:
         b (np.ndarray): B matrix from EASE.
+
         top_adj (int or float): If the type of top_adj is int,
             top-k weights are remained per row. If the type of top_adj is float,
             the weights which is greater or equal to top_adj are remained.
+
+         laplacian_norm (bool): Apply laplacian norm when true.
 
     Returns:
         adj (np.ndarray): Adjacency matrix.
@@ -67,6 +70,33 @@ def get_adj(
         adj[indices] = b[indices]
     else:
         adj[indices] = 1
+
+    adj = csgraph.laplacian(adj, normed=laplacian_norm)
+
+    return adj
+
+
+def get_random_adj(
+    dim: int,
+    sparsity: float,
+    laplacian_norm: bool = True,
+) -> np.ndarray:
+    """Get random adjacency matrix.
+
+    Args:
+        dim (int): Dimension of adjacency matrix (dim x dim).
+        sparsity (float): Sparsity of matrix (proportion of 0).
+        laplacian_norm (bool): Apply laplacian norm when true.
+
+    Returns:
+        adj (np.ndarray): Generated adjacency matrix.
+    """
+    adj = np.zeros((dim, dim))
+    triu_inds = np.triu_indices(dim, 1)
+    mask = np.random.binomial(1, 1 - sparsity, triu_inds[0].shape[0]).astype(np.bool)
+    value = np.random.randn(mask.shape[0])
+    adj[triu_inds[0][mask], triu_inds[1][mask]] = value[mask]
+    adj.T[triu_inds[0][mask], triu_inds[1][mask]] = value[mask]
 
     adj = csgraph.laplacian(adj, normed=laplacian_norm)
 
