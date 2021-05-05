@@ -23,7 +23,7 @@ def log_logfile(log_filepath: str, test_run: bool = False):
     if test_run:
         return
 
-    mlflow.log_artifact(log_filepath, "log")
+    mlflow.log_artifact(log_filepath, "logs")
 
 
 def log_tag(

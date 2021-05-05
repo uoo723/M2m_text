@@ -111,7 +111,7 @@ GCN_MODELS = [
 
 def log_elapsed_time(func):
     @wraps(func)
-    def wrapped_func(*args, **kwargs):
+    def wrapper(*args, **kwargs):
         start = time.time()
         ret = func(*args, **kwargs)
         end = time.time()
@@ -120,7 +120,26 @@ def log_elapsed_time(func):
 
         return ret
 
-    return wrapped_func
+    return wrapper
+
+
+def set_mlflow_status(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except KeyboardInterrupt as e:
+            run = mlflow.active_run()
+            if run is not None:
+                mlflow.end_run("KILLED")
+            raise e
+        except Exception as e:
+            run = mlflow.active_run()
+            if run is not None:
+                mlflow.end_run("FAILED")
+            raise e
+
+    return wrapper
 
 
 def set_logger(log_path: str):
@@ -290,6 +309,7 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     help="Early stopping criterion",
 )
 @log_elapsed_time
+@set_mlflow_status
 def main(
     mode,
     test_run,
