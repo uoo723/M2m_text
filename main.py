@@ -457,7 +457,7 @@ def main(
             other_states = {}
 
         logger.info("Training")
-
+        logger.info(os.path.splitext(os.path.basename(ckpt_path))[0])
         train(
             network,
             device,
