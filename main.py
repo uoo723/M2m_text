@@ -5,7 +5,9 @@ Created on 2020/12/31
 import copy
 import os
 import random
+import time
 import warnings
+from functools import wraps
 from pathlib import Path
 from typing import Optional
 
@@ -47,7 +49,6 @@ from m2m_text.networks import (
     LabelGCNAttentionRNNv2,
     LabelGCNAttentionRNNv3,
     LabelGCNAttentionRNNv4,
-    # LabelGCNAttentionRNNv5,
     LaRoberta,
     LaRobertaV2,
     RobertaForSeqClassification,
@@ -106,6 +107,20 @@ GCN_MODELS = [
     "LabelGCNAttentionRNNv4",
     # "LabelGCNAttentionRNNv5",
 ]
+
+
+def log_elapsed_time(func):
+    @wraps(func)
+    def wrapped_func(*args, **kwargs):
+        start = time.time()
+        ret = func(*args, **kwargs)
+        end = time.time()
+
+        logger.info(f"elapsed time: {end - start:.2f}s")
+
+        return ret
+
+    return wrapped_func
 
 
 def set_logger(log_path: str):
@@ -274,6 +289,7 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default="n5",
     help="Early stopping criterion",
 )
+@log_elapsed_time
 def main(
     mode,
     test_run,
