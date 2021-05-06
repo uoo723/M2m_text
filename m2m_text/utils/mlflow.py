@@ -12,8 +12,8 @@ def log_config(
     if test_run:
         return
 
-    mlflow.log_artifact(data_cnf, "config")
-    mlflow.log_artifact(model_cnf, "config")
+    mlflow.log_artifact(data_cnf, "config/data")
+    mlflow.log_artifact(model_cnf, "config/model")
 
     if run_script is not None:
         mlflow.log_artifact(run_script, "scripts")
