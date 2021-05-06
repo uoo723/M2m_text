@@ -7,6 +7,7 @@ import os
 import random
 import time
 import warnings
+from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Optional
@@ -116,7 +117,8 @@ def log_elapsed_time(func):
         ret = func(*args, **kwargs)
         end = time.time()
 
-        logger.info(f"elapsed time: {end - start:.2f}s")
+        elapsed = end - start
+        logger.info(f"elapsed time: {end - start:.2f}s, {timedelta(seconds=elapsed)}")
 
         return ret
 
