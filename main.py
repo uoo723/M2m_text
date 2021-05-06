@@ -382,7 +382,11 @@ def main(
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        test_dataset = DATASET_CLS[dataset_name](train=False, **data_cnf["dataset"])
+        test_dataset = DATASET_CLS[dataset_name](
+            train=False,
+            **data_cnf["dataset"],
+            **model_cnf.get("dataset", {}),
+        )
 
     le = get_le(train_dataset.le_path)
     num_labels = len(le.classes_)
