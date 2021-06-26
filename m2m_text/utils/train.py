@@ -46,6 +46,7 @@ def clip_gradient(
     model: Union[nn.Module, nn.DataParallel],
     gradient_norm_queue: deque,
     gradient_clip_value: Optional[float] = None,
+    verbose: bool = False,
 ):
     if gradient_clip_value is None:
         return
@@ -58,10 +59,11 @@ def clip_gradient(
     if total_norm > max_norm * gradient_clip_value:
         total_norm = total_norm.item() if hasattr(total_norm, "item") else total_norm
         max_norm = max_norm.item() if hasattr(max_norm, "item") else max_norm
-        logger.warning(
-            f"Clipping gradients with total norm {round(total_norm, 5)} "
-            f"and max norm {round(max_norm, 5)}"
-        )
+        if verbose:
+            logger.warning(
+                f"Clipping gradients with total norm {round(total_norm, 5)} "
+                f"and max norm {round(max_norm, 5)}"
+            )
 
 
 def swa_init(model, swa_state):

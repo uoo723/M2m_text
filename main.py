@@ -42,6 +42,7 @@ from m2m_text.metrics import get_inv_propensity
 from m2m_text.networks import (
     AttentionRGCN,
     AttentionRNN,
+    AttentionRNNEncoder,
     CornetAttentionRNN,
     CornetAttentionRNNv2,
     EaseAttentionRNN,
@@ -69,6 +70,7 @@ from m2m_text.utils.model import load_checkpoint
 
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
+    "AttentionRNNEncoder": AttentionRNNEncoder,
     "AttentionRGCN": AttentionRGCN,
     "CornetAttentionRNN": CornetAttentionRNN,
     "CornetAttentionRNNv2": CornetAttentionRNNv2,

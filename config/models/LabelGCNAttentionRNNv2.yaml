@@ -7,12 +7,13 @@ model:
   dropout: 0.5
   emb_trainable: false
   emb_size: 300
-  lamda: 500
+  lamda: 10
   random_init: false
   gcn_hidden_size: [300, 300]
   gcl_linear_size: [256]
   gcn_dropout: 0.3
-  top_adj: 2e-5
+  top_adj: 5e-5
   use_b_weights: true
   laplacian_norm: true
   enable_gating: true
+  # random_adj_init_sp: 0.953

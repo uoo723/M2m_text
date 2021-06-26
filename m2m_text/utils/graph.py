@@ -2,9 +2,13 @@
 Created on 2021/04/05
 @author Sangwoo Han
 """
-from typing import Union
+from typing import Dict, List, Union
 
 import numpy as np
+import torch
+from dgl.dataloading import distributed, sampling, subgraph
+from dgl.dataloading.neighbor import BlockSampler
+from dgl.heterograph import DGLBlock
 from scipy.sparse import csgraph
 
 from ..datasets._base import Dataset
@@ -101,3 +105,71 @@ def get_random_adj(
     adj = csgraph.laplacian(adj, normed=laplacian_norm)
 
     return adj
+
+
+def stack_embed(
+    blocks: DGLBlock,
+    nids: List[int],
+    h_embeds: Union[Dict[str, List[torch.Tensor]], List[torch.Tensor]],
+    node_type: str = None,
+) -> torch.Tensor:
+    h_embed = []
+
+    for h, block in zip(h_embeds[:-1], blocks[1:]):
+        temp = []
+        for _id in nids:
+            if node_type:
+                index = torch.where(block.srcdata["_ID"][node_type] == _id)[0]
+            else:
+                index = torch.where(block.srcdata["_ID"] == _id)[0]
+
+            assert index.nelement() != 0
+
+            if node_type:
+                temp.append(h[node_type][index])
+            else:
+                temp.append(h[index])
+
+        h_embed.append(torch.cat(temp))
+
+    if node_type:
+        h_embed.append(h_embeds[-1][node_type])
+    else:
+        h_embed.append(h_embeds[-1])
+
+    return torch.stack(h_embed, dim=1)
+
+
+class MultiLayerNeighborSampler(BlockSampler):
+    """
+    Reference: https://docs.dgl.ai/en/0.6.x/_modules/dgl/dataloading/neighbor.html#MultiLayerNeighborSampler
+    """
+
+    def __init__(self, fanouts, replace=False, prob=None, return_eids=False):
+        super().__init__(len(fanouts), return_eids)
+
+        self.fanouts = fanouts
+        self.replace = replace
+        self.prob = prob
+
+    def sample_frontier(self, block_id, g, seed_nodes):
+        fanout = self.fanouts[block_id]
+        if isinstance(g, distributed.DistGraph):
+            if fanout is None:
+                # TODO(zhengda) There is a bug in the distributed version of in_subgraph.
+                # let's use sample_neighbors to replace in_subgraph for now.
+                frontier = distributed.sample_neighbors(
+                    g, seed_nodes, -1, replace=False
+                )
+            else:
+                frontier = distributed.sample_neighbors(
+                    g, seed_nodes, fanout, replace=self.replace
+                )
+        else:
+            if fanout is None:
+                frontier = subgraph.in_subgraph(g, seed_nodes)
+            else:
+                frontier = sampling.sample_neighbors(
+                    g, seed_nodes, fanout, replace=self.replace, prob=self.prob
+                )
+        return frontier

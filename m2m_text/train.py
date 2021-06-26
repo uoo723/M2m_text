@@ -36,8 +36,8 @@ def train_step(
     optimizer,
     data_x,
     data_y,
-    gradient_norm_queue,
-    gradient_max_norm,
+    gradient_norm_queue=None,
+    gradient_max_norm=None,
 ) -> float:
     model.train()
 
@@ -48,7 +48,10 @@ def train_step(
         }
         outputs = model(**inputs, return_dict=False)[0]
     else:
-        outputs = model(data_x)
+        if isinstance(data_x, dict):
+            outputs = model(**data_x)
+        else:
+            outputs = model(data_x)
 
     loss = criterion(outputs, data_y)
 

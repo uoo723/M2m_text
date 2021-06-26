@@ -6,7 +6,7 @@ Created on 2020/12/31
 """
 
 from itertools import combinations
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 import dgl
 import numpy as np
@@ -14,7 +14,9 @@ import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl.nn.pytorch import GATConv
+from dgl.heterograph import DGLBlock
+from dgl.nn import GATConv, GINConv
+from sentence_transformers import SentenceTransformer, models
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.roberta.modeling_roberta import (
@@ -29,12 +31,16 @@ from .modules import (
     Embedding,
     GateAttention,
     GCNLayer,
+    Identity,
+    LabelEmbedding,
     LSTMEncoder,
     MLAttention,
+    MLAttention2,
     MLLinear,
     Readout,
+    Residual,
 )
-from .utils.graph import get_ease_weight
+from .utils.graph import get_ease_weight, stack_embed
 
 
 class Network(nn.Module):
@@ -48,7 +54,7 @@ class Network(nn.Module):
         emb_dropout: float = 0.2,
         **kwargs,
     ):
-        super(Network, self).__init__()
+        super().__init__()
         self.emb = Embedding(
             vocab_size, emb_size, emb_init, emb_trainable, padding_idx, emb_dropout
         )
@@ -69,7 +75,7 @@ class AttentionRNN(Network):
         max_length: int,
         **kwargs,
     ):
-        super(AttentionRNN, self).__init__(emb_size, **kwargs)
+        super().__init__(emb_size, **kwargs)
         # self.batch_m = nn.BatchNorm1d(max_length)
         # self.batch_m2 = nn.BatchNorm1d(num_labels)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
@@ -155,6 +161,33 @@ class AttentionRNN(Network):
         # attn_out = self.batch_m2(attn_out)
 
         return self.linear(attn_out)
+
+
+class AttentionRNNEncoder(Network):
+    def __init__(
+        self,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        dropout: float,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(emb_size, *args, **kwargs)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+
+    def forward(
+        self,
+        inputs,
+        *args,
+        **kwargs,
+    ):
+        emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
+        emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+
+        rnn_out = self.lstm(emb_out, lengths)  # N, L, hidden_size * 2
+        index = (torch.arange(emb_out.shape[0]), lengths - 1)
+        return rnn_out[index]
 
 
 class FCNet(nn.Module):
@@ -945,7 +978,9 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
             nn.init.xavier_normal_(self.gate.weight)
         else:
             self.register_parameter("gate", None)
-            self.linear = MLLinear([hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1)
+            self.linear = MLLinear(
+                [hidden_size * 2 + gcn_hidden_size[-1]] + linear_size, 1
+            )
 
     def init_label_emb(self, num_labels, label_emb_size, label_emb_init):
         self.label_emb = nn.Parameter(torch.FloatTensor(num_labels, label_emb_size))
@@ -995,6 +1030,84 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
         return self.linear(outputs)
 
 
+class LabelGCNAttentionRNNv5(nn.Module):
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        linear_size: List[int],
+        dropout: float,
+        *args,
+        **kwargs,
+    ):
+        super().__init__()
+        self.attention_rnn = AttentionRNNEncoder(
+            emb_size,
+            hidden_size,
+            num_layers,
+            dropout,
+            *args,
+            **kwargs,
+        )
+
+        self.label_emb = Embedding(
+            num_labels, emb_size=hidden_size * 2, padding_idx=None
+        )
+
+        self.linear = MLLinear(linear_size[-1], num_labels)
+
+        linear_size = [hidden_size * 2] + linear_size + [hidden_size * 2]
+
+        self.conv = nn.ModuleList(
+            GINConv(nn.Linear(in_s, out_s), "sum", learn_eps=True)
+            for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
+        )
+
+        self.residual = nn.ModuleList(
+            nn.Sequential(
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                Residual(linear_size[-1], linear_size[-1], dropout),
+            )
+            for _ in range(len(linear_size) - 1)
+        )
+
+    def forward(
+        self,
+        graph: Union[dgl.DGLGraph, List[DGLBlock]],
+        inputs: torch.Tensor,
+        return_hidden: bool = False,
+    ):
+        hidden_list = []
+
+        if isinstance(graph, list):
+            blocks = graph
+        else:
+            blocks = [g for g in range(self.conv_list)]
+
+        h = inputs
+
+        for conv, residual, block in zip(self.conv, self.residual, blocks):
+            h = conv(block, h)
+            h = residual(h)
+            hidden_list.append(h)
+
+        stacked_hidden = stack_embed(
+            blocks, blocks[-1].dstdata["_ID"], hidden_list
+        )  # N x num_layer x hidden_size
+        outputs = stacked_hidden.mean(dim=1)
+        outputs = self.linear(outputs)
+
+        ret = (outputs,)
+
+        if return_hidden:
+            ret += (stacked_hidden,)
+
+        return ret
+
+
 # class LabelGCNAttentionRNNv5(AttentionRNN):
 #     """Do not use"""
 #     def __init__(
@@ -1035,3 +1148,170 @@ class LabelGCNAttentionRNNv4(AttentionRNN):
 #         model_out = self.linear2(super().forward(*args, **kwargs))
 #         gcn_out = self.gcl(self.label_emb)
 #         return model_out @ gcn_out.transpose(1, 0)
+
+
+class GraphXC(nn.Module):
+    def __init__(
+        self,
+        num_labels: int,
+        input_size: int,
+        output_size: int,
+        hidden_size: List[int],
+        dropout: int = 0.5,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        linear_size = [input_size] + hidden_size + [output_size]
+        self.attention = MLAttention2(num_labels, output_size)
+        self.linear = MLLinear([output_size], 1)
+
+        self.conv_list = nn.ModuleList(
+            GINConv(nn.Linear(in_s, out_s), "sum", learn_eps=True)
+            for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
+        )
+
+        self.residual_list = nn.ModuleList(
+            nn.Sequential(
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                Residual(output_size, output_size, dropout),
+            )
+            for _ in range(len(linear_size) - 1)
+        )
+
+    def forward(
+        self,
+        graph: Union[dgl.DGLGraph, List[DGLBlock]],
+        inputs: torch.Tensor,
+        return_hidden: bool = False,
+    ):
+        hidden_list = []
+
+        if isinstance(graph, list):
+            blocks = graph
+        else:
+            blocks = [g for g in range(self.conv_list)]
+
+        h = inputs
+
+        for conv, residual, block in zip(self.conv_list, self.residual_list, blocks):
+            h = conv(block, h)
+            h = residual(h)
+            hidden_list.append(h)
+
+        stacked_hidden = stack_embed(
+            blocks, blocks[-1].dstdata["_ID"], hidden_list
+        )  # N x num_layer x hidden_size
+        outputs = self.attention(stacked_hidden)
+        outputs = self.linear(outputs)
+
+        ret = (outputs,)
+
+        if return_hidden:
+            ret += (stacked_hidden,)
+
+        return ret
+
+
+class AutoEncoder(nn.Module):
+    def __init__(self, input_size: int, hidden_size: List[int]):
+        super().__init__()
+
+        self.encoder = MLLinear([input_size] + hidden_size[:-1], hidden_size[-1])
+        self.decoder = MLLinear(hidden_size[::-1], input_size)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.encoder(inputs))
+
+
+class LabelEncoder(nn.Module):
+    def __init__(
+        self,
+        num_labels: int,
+        linear_size: List[int],
+        output_size: int,
+        emb_size: Optional[int] = None,
+        emb_init: Union[np.ndarray, str] = None,
+        emb_trainable: bool = True,
+        dropout: bool = 0.2,
+        mp_enabled: bool = False,
+        enable_layer_norm: bool = True,
+        output_layer: Optional[nn.Module] = None,
+    ):
+        super().__init__()
+        self.mp_enabled = mp_enabled
+
+        self.emb = LabelEmbedding(
+            num_labels, emb_size, emb_init, emb_trainable, dropout
+        )
+        self.layer_norm = nn.LayerNorm(emb_size) if enable_layer_norm else Identity
+        self.linear = MLLinear([emb_size] + linear_size, output_size, enable_layer_norm)
+        self.output_layer = Identity() if output_layer is None else output_layer
+
+    def forward(
+        self, inputs: torch.Tensor, mp_enabled: Optional[bool] = None
+    ) -> torch.Tensor:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            outputs = self.output_layer(self.linear(self.layer_norm(self.emb(inputs))))
+        return outputs
+
+
+class SBert(nn.Module):
+    def __init__(
+        self,
+        model_name: str,
+        num_labels: int,
+        linear_size: List[int],
+        mp_enabled: bool = False,
+        max_seq_length: int = 150,
+        pooling_mode: Optional[str] = None,
+        output_layer: Optional[nn.Module] = None,
+    ):
+        super().__init__()
+
+        self.mp_enabled = mp_enabled
+
+        word_embedding_model = models.Transformer(
+            model_name, max_seq_length=max_seq_length
+        )
+
+        embedding_size = word_embedding_model.get_word_embedding_dimension()
+
+        pooling_model = models.Pooling(
+            embedding_size,
+            pooling_mode=pooling_mode,
+        )
+        self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+        self.linear = MLLinear([embedding_size] + linear_size, num_labels)
+        self.output_layer = Identity() if output_layer is None else output_layer
+
+    def forward(
+        self,
+        inputs: Dict[str, torch.Tensor],
+        return_linear: bool = False,
+        mp_enabled: Optional[bool] = None,
+    ):
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            model_outputs = self.model(inputs)
+            outputs = (
+                self.output_layer(model_outputs["sentence_embedding"]),
+                model_outputs,
+            )
+
+            if return_linear:
+                outputs = outputs + (self.linear(model_outputs),)
+
+        return outputs
+
+    def tokenize(self, *args, **kwargs):
+        return self.model.tokenize(*args, **kwargs)
+
+    def encode(self, *args, **kwargs):
+        return self.model.encode(*args, **kwargs)

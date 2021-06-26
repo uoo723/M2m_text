@@ -93,7 +93,7 @@ def get_tokenized_texts(
 
 def get_sparse_features(
     path: str,
-    tokenized_texts: Optional[Iterable[Iterable[str]]] = None,
+    tokenized_texts: Optional[Union[Iterable[Iterable[str]], Iterable[str]]] = None,
     max_features: int = 100_000,
     force: bool = False,
 ) -> csr_matrix:
@@ -105,6 +105,8 @@ def get_sparse_features(
 
     sparse_x = TfidfVectorizer(max_features=max_features).fit_transform(
         map(lambda t: " ".join(t), tokenized_texts)
+        if type(tokenized_texts[0]) == list
+        else tokenized_texts
     )
 
     sp.save_npz(path, sparse_x)
