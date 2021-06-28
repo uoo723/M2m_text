@@ -42,7 +42,7 @@ def get_accuracy(labels: np.ndarray, targets: np.ndarray) -> Dict[str, float]:
 def get_precision_results(
     prediction: TPredict,
     targets: TTarget,
-    inv_w: np.ndarray,
+    inv_w: Optional[np.ndarray] = None,
     mlb: TMlb = None,
 ) -> Dict[str, float]:
     if mlb is None:
@@ -61,28 +61,35 @@ def get_precision_results(
         n3 = get_n_3(prediction, targets, mlb)
         n5 = get_n_5(prediction, targets, mlb)
 
-        psp1 = get_psp_1(prediction, targets, inv_w, mlb)
-        psp3 = get_psp_3(prediction, targets, inv_w, mlb)
-        psp5 = get_psp_5(prediction, targets, inv_w, mlb)
+        ret = {
+            "p1": p1,
+            "p3": p3,
+            "p5": p5,
+            "n1": n1,
+            "n3": n3,
+            "n5": n5,
+        }
 
-        psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
-        psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
-        psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
+        if inv_w is not None:
+            psp1 = get_psp_1(prediction, targets, inv_w, mlb)
+            psp3 = get_psp_3(prediction, targets, inv_w, mlb)
+            psp5 = get_psp_5(prediction, targets, inv_w, mlb)
 
-    return {
-        "p1": p1,
-        "p3": p3,
-        "p5": p5,
-        "n1": n1,
-        "n3": n3,
-        "n5": n5,
-        "psp1": psp1,
-        "psp3": psp3,
-        "psp5": psp5,
-        "psn1": psn1,
-        "psn3": psn3,
-        "psn5": psn5,
-    }
+            psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
+            psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
+            psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
+
+            ret = {
+                **ret,
+                "psp1": psp1,
+                "psp3": psp3,
+                "psp5": psp5,
+                "psn1": psn1,
+                "psn3": psn3,
+                "psn5": psn5,
+            }
+
+    return ret
 
 
 def get_precision(
