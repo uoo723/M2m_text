@@ -1,0 +1,5 @@
+name: SBert
+
+model:
+  model_name:  roberta-base
+  linear_size: [1024]

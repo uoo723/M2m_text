@@ -1267,16 +1267,17 @@ class SBert(nn.Module):
         num_labels: int,
         linear_size: List[int],
         mp_enabled: bool = False,
-        max_seq_length: int = 150,
+        max_length: int = 150,
         pooling_mode: Optional[str] = None,
         output_layer: Optional[nn.Module] = None,
+        emb_init: Optional[int] = None,
     ):
         super().__init__()
 
         self.mp_enabled = mp_enabled
 
         word_embedding_model = models.Transformer(
-            model_name, max_seq_length=max_seq_length
+            model_name, max_seq_length=max_length
         )
 
         embedding_size = word_embedding_model.get_word_embedding_dimension()
@@ -1295,18 +1296,20 @@ class SBert(nn.Module):
         return_linear: bool = False,
         mp_enabled: Optional[bool] = None,
     ):
+        
         if mp_enabled is None:
             mp_enabled = self.mp_enabled
 
         with torch.cuda.amp.autocast(enabled=mp_enabled):
             model_outputs = self.model(inputs)
-            outputs = (
-                self.output_layer(model_outputs["sentence_embedding"]),
-                model_outputs,
-            )
+            emb_outputs = model_outputs["sentence_embedding"] #torch.Size([20, 768])
+            #outputs = (self.output_layer(emb_outputs), model_outputs)
 
             if return_linear:
-                outputs = outputs + (self.linear(model_outputs),)
+                outputs = self.linear(emb_outputs)
+                #model output dim:torch.Size([20, num_labels])  
+                #outputs = outputs + (self.linear(emb_outputs),)
+                #tuple + tuple : ('a', 'b') + (1, 2) = ('a, 'b', 1, 2)
 
         return outputs
 

@@ -52,6 +52,8 @@ def get_precision_results(
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        #(3090, 5), (3090,), (3801,), ()  
+        #print(f"prediction, targets, inv_w, mlb: {np.shape(prediction)}, {np.shape(targets)}, {np.shape(inv_w)}, {np.shape(mlb)}")
 
         p1 = get_p_1(prediction, targets, mlb)
         p3 = get_p_3(prediction, targets, mlb)

@@ -9,7 +9,8 @@ DATASET=EURLex-4K
 # DATASET=AmazonCat-1000
 # DATASET=Wiki10-3000
 
-MODEL=AttentionRNN
+MODEL=SBert
+# MODEL=AttentionRNN
 # MODEL=CornetAttentionRNNv2
 # MODEL=LabelGCNAttentionRNN
 # MODEL=LabelGCNAttentionRNNv2
@@ -21,7 +22,7 @@ args=(
     --model-cnf config/models/$MODEL.yaml
     --data-cnf config/datasets/$DATASET.yaml
     --run-script $0
-    # --test-run
+    #--test-run
     --no-scheduler
     --epoch 60
     --lr 1e-3
@@ -34,6 +35,7 @@ args=(
     --swa-warmup 10
     --eval-step 100
     --early 50
+    --do-clustering
     # --net-t ./checkpoint/label_emb_init_LabelGCNAttentionRNNv4_EURLex4K_1240_last.pt
 )
 

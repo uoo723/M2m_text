@@ -49,7 +49,7 @@ def train_step(
         outputs = model(**inputs, return_dict=False)[0]
     else:
         if isinstance(data_x, dict):
-            outputs = model(**data_x)
+            outputs = model(inputs= data_x, return_linear=True)
         else:
             outputs = model(data_x)
 
@@ -77,6 +77,7 @@ def train(
     train_loader,
     valid_loader,
     ckpt_path,
+    data_mlb, 
     other_states={},  # To resume training
     step=100,
     early=50,
@@ -105,7 +106,8 @@ def train(
 
     y = sp.vstack([train_loader.dataset.y, valid_loader.dataset.y])
     inv_w = get_inv_propensity(y)
-    mlb = get_mlb(train_loader.dataset.le_path)
+    #mlb = get_mlb(train_loader.dataset.le_path)
+    mlb = data_mlb
 
     for epoch in range(start_epoch, epochs):
         if epoch == swa_warmup:
@@ -115,6 +117,9 @@ def train(
         for i, (batch_x, batch_y) in enumerate(train_loader, 1):
             if isinstance(batch_x, (list, tuple)):
                 batch_x = tuple(batch.to(device) for batch in batch_x)
+            elif isinstance(batch_x, dict):
+                for k, v in batch_x.items():
+                    batch_x[k] = v.to(device)
             else:
                 batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
@@ -146,6 +151,8 @@ def train(
                     ]
                 )
                 targets = valid_loader.dataset.raw_y
+                #labels:(3090, 5), targets:(3090,) 
+                #print(f"labels:{np.shape(labels)}, targets:{np.shape(targets)}")
                 results = get_precision_results(labels, targets, inv_w, mlb)
                 log_metric(
                     {f"val_{k}": v for k, v in results.items()},
@@ -236,7 +243,12 @@ def predict_step(
             }
             logits = model(**inputs, return_dict=False)[0]
         else:
-            logits = model(data_x.to(device))
+            if isinstance(data_x, dict):
+                for k, v in data_x.items():
+                    data_x[k] = v.to(device)
+                logits = model(inputs= data_x, return_linear=True)
+            else:
+                logits = model(data_x.to(device))
 
         if multi_label:
             scores, labels = torch.topk(logits, topk)

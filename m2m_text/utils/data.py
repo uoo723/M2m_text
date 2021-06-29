@@ -69,6 +69,10 @@ def get_mlb(
     if os.path.isfile(mlb_path) and not force:
         return joblib.load(mlb_path)
     mlb = MultiLabelBinarizer(sparse_output=True)
+    """
+        multi-label text -> binary class output
+        'scab, frog_eye_leaf_spot, complex -> [1, 1, 0, 0, 0, 1] 
+    """
     mlb.fit(labels)
     joblib.dump(mlb, mlb_path)
     return mlb
@@ -94,9 +98,12 @@ def get_tokenized_texts(
 def get_sparse_features(
     path: str,
     tokenized_texts: Optional[Union[Iterable[Iterable[str]], Iterable[str]]] = None,
-    max_features: int = 100_000,
+    max_features: int = 100_000, #100,000 for reaability
     force: bool = False,
 ) -> csr_matrix:
+    """
+        input으로 받은 텍스트를 (데이터 개수 x corpus 개수) matrix로 저장. 
+    """
     if os.path.isfile(path) and not force:
         return sp.load_npz(path)
 

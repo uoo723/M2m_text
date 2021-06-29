@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, csc_matrix
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -43,6 +43,7 @@ from m2m_text.networks import (
     AttentionRGCN,
     AttentionRNN,
     AttentionRNNEncoder,
+    SBert,
     CornetAttentionRNN,
     CornetAttentionRNNv2,
     EaseAttentionRNN,
@@ -68,9 +69,16 @@ from m2m_text.utils.graph import get_adj, get_ease_weight, get_random_adj
 from m2m_text.utils.mlflow import log_ckpt, log_config, log_logfile, log_metric, log_tag
 from m2m_text.utils.model import load_checkpoint
 
+from sentence_transformers import SentenceTransformer, models
+from m2m_text.cluster import get_clusters
+from m2m_text.utils.data import get_sparse_features
+from sklearn.preprocessing import MultiLabelBinarizer, normalize
+
+
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
     "AttentionRNNEncoder": AttentionRNNEncoder,
+    "SBert": SBert,
     "AttentionRGCN": AttentionRGCN,
     "CornetAttentionRNN": CornetAttentionRNN,
     "CornetAttentionRNNv2": CornetAttentionRNNv2,
@@ -210,6 +218,10 @@ def load_model(
 
         network = MODEL_CLS[model_name](num_labels=num_labels, **model_cnf["model"])
 
+        if model_name == "SBert":
+            sbert_pretrained = SentenceTransformer("stsb-roberta-base-v2")
+            network.model[0].load_state_dict(list(sbert_pretrained.modules())[0][0].state_dict())
+
     return network
 
 
@@ -240,6 +252,209 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
 
     return optimizer
 
+def get_dataset(
+    model_name: str,
+    dataset_name: str,
+    model_cnf: dict,
+    data_cnf: dict,
+    do_clustering: bool = False,
+    ):
+    
+    if model_name == "SBert":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            train_dataset = DATASET_CLS[dataset_name](
+                **data_cnf["dataset"], **model_cnf.get("dataset", {})
+            )
+            valid_dataset = copy.deepcopy(train_dataset)
+            test_dataset = DATASET_CLS[dataset_name](
+                train=False, **data_cnf["dataset"], **model_cnf.get("dataset", {})
+            )
+            #inv_w = get_inv_propensity(train_dataset.y)
+            mlb = get_mlb(train_dataset.le_path)
+            num_labels = len(mlb.classes_)
+            #cnt_y = train_dataset.y.sum(axis=0).A1
+
+        train_texts = np.array(
+            [
+                " ".join(texts)
+                for texts in np.load(train_dataset.tokenized_path, allow_pickle=True)
+            ],
+            dtype=np.object,
+        )
+        test_texts = np.array(
+            [
+                " ".join(texts)
+                for texts in np.load(test_dataset.tokenized_path, allow_pickle=True)
+            ],
+            dtype=np.object,
+        )
+
+        train_mask = torch.cat(
+            [
+                torch.zeros(train_dataset.x.shape[0], dtype=torch.bool).bernoulli(
+                    1 - data_cnf["valid_size"]
+                ),
+            ]
+        ) #tensor([False,  True,  True,  ...,  True,  True,  True])    
+        word_embedding_model = models.Transformer(
+            model_cnf["model"]["model_name"], max_seq_length=data_cnf["dataset"]["maxlen"]
+        )
+        embedding_size = word_embedding_model.get_word_embedding_dimension()
+
+        pooling_model = models.Pooling(
+            embedding_size,
+            pooling_mode=None,
+        )
+        sbert_pretrained = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+        
+        train_tokenized_texts = sbert_pretrained.tokenize(train_texts[train_mask])
+        #"input_ids" length : 150
+        # for i in range(5):
+        #     print(len(train_tokenized_texts["input_ids"][i]), len(train_tokenized_texts["attention_mask"][i]) )
+        valid_tokenized_texts = sbert_pretrained.tokenize(train_texts[~train_mask])
+        test_tokenized_texts = sbert_pretrained.tokenize(test_texts)
+        
+        train_dataset.x = train_tokenized_texts
+        train_dataset._split_indices = train_mask
+
+        valid_dataset.x = valid_tokenized_texts
+        valid_dataset._split_indices = ~train_mask
+
+        test_dataset.x = test_tokenized_texts
+
+        if do_clustering: 
+            train_cluster_y, test_cluster_y, train_cluster_raw_y, test_cluster_raw_y, num_clusters, cluster_mlb = get_cluster(dataset_name, train_texts, train_dataset, test_dataset)
+
+            train_dataset.y = train_cluster_y[train_mask]
+            train_dataset.raw_y = train_cluster_raw_y[train_mask]
+
+            valid_dataset.y = train_cluster_y[~train_mask]
+            valid_dataset.raw_y = train_cluster_raw_y[~train_mask]
+
+            test_dataset.y = test_cluster_y
+            test_dataset.raw_y = test_cluster_raw_y
+
+            num_labels = num_clusters
+            mlb = cluster_mlb
+        else: 
+            train_dataset.y = train_dataset.y[train_mask]
+            train_dataset.raw_y = train_dataset.raw_y[train_mask]
+
+            valid_dataset.y = valid_dataset.y[~train_mask]
+            valid_dataset.raw_y = valid_dataset.raw_y[~train_mask]
+        
+    else: 
+        train_dataset, valid_dataset = DATASET_CLS[dataset_name].splits(
+            test_size=data_cnf.get("valid_size", 200),
+            **data_cnf["dataset"],
+            **model_cnf.get("dataset", {}),
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            test_dataset = DATASET_CLS[dataset_name](
+                train=False,
+                **data_cnf["dataset"],
+                **model_cnf.get("dataset", {}),
+            )
+        
+        mlb = get_mlb(train_dataset.le_path)
+        le = get_le(train_dataset.le_path)
+        num_labels = len(le.classes_)
+
+    logger.info(f"# of train dataset: {len(train_dataset):,}")
+    logger.info(f"# of valid dataset: {len(valid_dataset):,}")
+    logger.info(f"# of test dataset: {len(test_dataset):,}")
+    logger.info(f"# of classes: {num_labels:,}")
+
+    return train_dataset, valid_dataset, test_dataset, num_labels, mlb
+
+def get_cluster(dataset_name, train_tokenized_texts, train_dataset, test_dataset): 
+    """
+    data 하나에 대응하는 label들이 속한 cluster ids
+    모든 train, test data에 대해서 csr_matrix로 저장. 
+    """
+    dataset_path = os.path.abspath(os.path.join("./data", dataset_name))
+    filepath = os.path.join(dataset_path, "train_sparse.npz")
+
+    sparse_x = get_sparse_features(filepath, train_tokenized_texts, force=False) #shape (data 개수, corpus 개수)
+    sparse_y = train_dataset.y
+    labels_f = normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x)) # (data 개수, label 개수).T x (data 개수, corpus 개수) = (label 개수, corpus 개수)
+    clusters = get_clusters(labels_f, levels=[9], verbose=True)
+
+    cluster = clusters[0] #index = cluster, value = label_ids 
+
+    num_clusters = len(cluster)
+    #print(f"# cluster:{num_clusters}") #512
+
+    label_to_cluster = np.zeros(labels_f.shape[0], dtype=np.int64)
+
+    for i, label_ids in enumerate(cluster):
+        """
+        484, [ 344  431 2906  143  422 2219 2834]                                                                                                          
+        485, [3510 1024 3287  619  223  611 2256 3551]                                                                                                     
+        486, [ 894 3635  190 3268   37  181 1610]                                                                                                       
+        487, [1609 3416 3730 2209 3655 2373  974  971]                                                                                                     
+        488, [ 175 1505 1500 2734   54 1501 2732]                                                                                                          
+        489, [2017 2553 3499  728  876 1620 2463  286]                                                                                                      
+        490, [1157 1149 2417  761  988 1619 2790]                                                                                                          
+        491, [ 330 2552   81  855  514  466 3500 2914]                                                                                                     
+        492, [2690 2887 1583 2692 1217 3359 3720]                                                                                                          
+        493, [2526 1829 3715 2409  314  955 2694  880]                                                                                                     
+        494, [1209 1775 2888 1215 2366 2043  512]       
+        """
+        #print(f"{i}, {label_ids}")
+        label_to_cluster[label_ids] = i
+
+    ########################for train_dataset##############################
+    
+    cluster_data = []
+    cluster_rows = []
+    cluster_cols = []
+    train_cluster_y = []
+
+    for i, y in enumerate(sparse_y):
+        #c_ids: data 하나에 대응하는 label들이 속한 cluster ids
+        c_ids = np.unique(label_to_cluster[y.indices]) #겹치는 값 빼고 list로 반환해줌  
+
+        cluster_data.extend([1.0 for _ in range(c_ids.shape[0])])
+        cluster_rows.extend([i for _ in range(c_ids.shape[0])])
+        cluster_cols.extend(c_ids.tolist())
+
+        train_cluster_y.append(c_ids)
+
+    train_cluster_y = np.array(train_cluster_y, dtype=np.object)
+    train_cluster_sparse_y = csr_matrix(
+        (cluster_data, (cluster_rows, cluster_cols)), shape=(sparse_y.shape[0], num_clusters)
+    )
+    ########################for test_dataset##############################
+
+    cluster_data = []
+    cluster_rows = []
+    cluster_cols = []
+    test_cluster_y = []
+
+    for i, y in enumerate(test_dataset.y):
+        c_ids = np.unique(label_to_cluster[y.indices])
+
+        cluster_data.extend([1.0 for _ in range(c_ids.shape[0])])
+        cluster_rows.extend([i for _ in range(c_ids.shape[0])])
+        cluster_cols.extend(c_ids.tolist())
+
+        test_cluster_y.append(c_ids)
+
+    test_cluster_y = np.array(test_cluster_y, dtype=np.object)
+    test_cluster_sparse_y = csr_matrix(
+        (cluster_data, (cluster_rows, cluster_cols)),
+        shape=(test_dataset.y.shape[0], num_clusters),
+    )
+
+    cluster_mlb = MultiLabelBinarizer(
+        classes=np.arange(num_clusters), sparse_output=True
+        ).fit(train_cluster_y)
+    
+    return train_cluster_sparse_y, test_cluster_sparse_y, train_cluster_y, test_cluster_y, num_clusters, cluster_mlb
 
 @click.command(context_settings={"show_default": True})
 @click.option(
@@ -312,6 +527,8 @@ def get_optimizer(model_name: str, network: nn.Module, lr: float, decay: float):
     default="n5",
     help="Early stopping criterion",
 )
+@click.option(
+    "--do-clustering", is_flag=True, default=False, help="Do clustering")
 @log_elapsed_time
 @set_mlflow_status
 def main(
@@ -339,6 +556,7 @@ def main(
     eval_step,
     early,
     early_criterion,
+    do_clustering,
 ):
     yaml = YAML(typ="safe")
 
@@ -376,29 +594,11 @@ def main(
     multi_label = dataset_name in MULTI_LABEL_DATASETS
 
     ################################## Prepare Dataset ###############################
+    data_mlb = None
+
     logger.info(f"Dataset: {dataset_name}")
 
-    train_dataset, valid_dataset = DATASET_CLS[dataset_name].splits(
-        test_size=data_cnf.get("valid_size", 200),
-        **data_cnf["dataset"],
-        **model_cnf.get("dataset", {}),
-    )
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        test_dataset = DATASET_CLS[dataset_name](
-            train=False,
-            **data_cnf["dataset"],
-            **model_cnf.get("dataset", {}),
-        )
-
-    le = get_le(train_dataset.le_path)
-    num_labels = len(le.classes_)
-
-    logger.info(f"# of train dataset: {len(train_dataset):,}")
-    logger.info(f"# of valid dataset: {len(valid_dataset):,}")
-    logger.info(f"# of test dataset: {len(test_dataset):,}")
-    logger.info(f"# of classes: {num_labels:,}")
+    train_dataset, valid_dataset, test_dataset, num_labels, data_mlb = get_dataset(model_name, dataset_name, model_cnf, data_cnf, do_clustering)
 
     train_loader = DataLoader(
         train_dataset,
@@ -424,7 +624,6 @@ def main(
         batch_size=test_batch_size,
     )
     ##################################################################################
-
     ################################# Prepare Model ##################################
     logger.info(f"Model: {model_name}")
 
@@ -442,7 +641,6 @@ def main(
     else:
         logger.info("CPU mode")
     ##################################################################################
-
     ################################### Training #####################################
     if mode == "train":
         criteron = nn.BCEWithLogitsLoss() if multi_label else nn.CrossEntropyLoss()
@@ -480,6 +678,7 @@ def main(
             train_loader,
             valid_loader,
             ckpt_path,
+            data_mlb, 
             other_states=other_states,
             step=eval_step,
             early=early,
@@ -500,7 +699,7 @@ def main(
 
     if multi_label:
         inv_w = get_inv_propensity(sp.vstack([train_dataset.y, valid_dataset.y]))
-        mlb = get_mlb(train_dataset.le_path)
+        mlb = data_mlb
     else:
         inv_w = None
         mlb = None

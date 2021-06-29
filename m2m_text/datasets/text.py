@@ -434,6 +434,11 @@ class EURLex(TextDataset):
     def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
         if type(self.texts) == tuple:
             texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        elif type(self.texts) == dict:
+            texts = dict()
+            for key in self.texts.keys():
+                #print(key)
+                texts[key] = self.texts.get(key)[index] 
         else:
             texts = torch.from_numpy(self.texts[index])
 

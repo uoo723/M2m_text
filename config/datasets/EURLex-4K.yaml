@@ -3,7 +3,8 @@ name: EURLex4K
 valid_size: 0.2
 
 dataset:
-  maxlen: 500
+  #maxlen: 500
+  maxlen: 150
   label_encoder_filename: label_encoder
   num_cores: -1
 
