@@ -120,6 +120,7 @@ def train(
             elif isinstance(batch_x, dict):
                 for k, v in batch_x.items():
                     batch_x[k] = v.to(device)
+                    #if k == "input_ids": print(f"x data:{batch_x[k]}, y_data:{batch_y}")
             else:
                 batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
@@ -152,7 +153,7 @@ def train(
                 )
                 targets = valid_loader.dataset.raw_y
                 #labels:(3090, 5), targets:(3090,) 
-                #print(f"labels:{np.shape(labels)}, targets:{np.shape(targets)}")
+                #print(f"labels:{labels}, targets:{targets}")
                 results = get_precision_results(labels, targets, inv_w, mlb)
                 log_metric(
                     {f"val_{k}": v for k, v in results.items()},
@@ -246,6 +247,7 @@ def predict_step(
             if isinstance(data_x, dict):
                 for k, v in data_x.items():
                     data_x[k] = v.to(device)
+                    #if k == "input_ids": print(f"x data:{data_x[k]}")
                 logits = model(inputs= data_x, return_linear=True)
             else:
                 logits = model(data_x.to(device))
@@ -256,7 +258,7 @@ def predict_step(
         else:
             scores = F.softmax(logits, dim=-1)
             labels = torch.argmax(scores, dim=-1)
-
+        #print(f"bf_ps logit:{logits}, labels:{labels}")
         return scores.cpu(), labels.cpu()
 
 

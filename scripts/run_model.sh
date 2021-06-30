@@ -25,7 +25,7 @@ args=(
     #--test-run
     --no-scheduler
     --epoch 60
-    --lr 1e-3
+    --lr 1e-5
     # --eta-min 1e-5
     --train-batch-size 40
     --test-batch-size 100

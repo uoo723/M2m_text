@@ -1310,7 +1310,7 @@ class SBert(nn.Module):
                 #model output dim:torch.Size([20, num_labels])  
                 #outputs = outputs + (self.linear(emb_outputs),)
                 #tuple + tuple : ('a', 'b') + (1, 2) = ('a, 'b', 1, 2)
-
+        #print(f"model inputs:{inputs}, emb_outputs:{emb_outputs}")
         return outputs
 
     def tokenize(self, *args, **kwargs):

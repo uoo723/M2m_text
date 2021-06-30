@@ -392,19 +392,19 @@ def get_cluster(dataset_name, train_tokenized_texts, train_dataset, test_dataset
 
     for i, label_ids in enumerate(cluster):
         """
-        484, [ 344  431 2906  143  422 2219 2834]                                                                                                          
-        485, [3510 1024 3287  619  223  611 2256 3551]                                                                                                     
-        486, [ 894 3635  190 3268   37  181 1610]                                                                                                       
-        487, [1609 3416 3730 2209 3655 2373  974  971]                                                                                                     
-        488, [ 175 1505 1500 2734   54 1501 2732]                                                                                                          
-        489, [2017 2553 3499  728  876 1620 2463  286]                                                                                                      
-        490, [1157 1149 2417  761  988 1619 2790]                                                                                                          
-        491, [ 330 2552   81  855  514  466 3500 2914]                                                                                                     
-        492, [2690 2887 1583 2692 1217 3359 3720]                                                                                                          
-        493, [2526 1829 3715 2409  314  955 2694  880]                                                                                                     
-        494, [1209 1775 2888 1215 2366 2043  512]       
+        labels                                          cluster
+        │[1698  855 1813 2190   29 2473 2477  450],     171
+        │[ 293 3590 1329  969 1987  878 2242],          172
+        │[2363 2403  226 1812 2547  252 2860 3349],     173
+        │[ 424 2043 3715 2637 3006 1196 2819],          174
+        │[3411 1877  163   81 2565 2417  246  989],     175
+        │[3177  579  584 2331 2328  221 3069],          176
+        │[3658 3592 3659 3047 3729 2248 2251],          177
+        │[ 107  103 2601  526 1538  973 2410],          178
+        │[3504 3655 2412 1833 2411  125 3416 3430],     179
+      
         """
-        #print(f"{i}, {label_ids}")
+        #if i>170 and i<180: print(f"{label_ids}, {i}")
         label_to_cluster[label_ids] = i
 
     ########################for train_dataset##############################
@@ -417,6 +417,7 @@ def get_cluster(dataset_name, train_tokenized_texts, train_dataset, test_dataset
     for i, y in enumerate(sparse_y):
         #c_ids: data 하나에 대응하는 label들이 속한 cluster ids
         c_ids = np.unique(label_to_cluster[y.indices]) #겹치는 값 빼고 list로 반환해줌  
+        #if i>400 and i<415: print(f"y.indices: {y.indices}, label_to_cluster:{label_to_cluster[y.indices]}, c_ids:{c_ids}")
 
         cluster_data.extend([1.0 for _ in range(c_ids.shape[0])])
         cluster_rows.extend([i for _ in range(c_ids.shape[0])])
