@@ -259,8 +259,7 @@ def get_dataset(
     data_cnf: dict,
     do_clustering: bool = False,
     ):
-    
-    if model_name == "SBert":
+    if do_clustering:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             train_dataset = DATASET_CLS[dataset_name](
@@ -270,11 +269,7 @@ def get_dataset(
             test_dataset = DATASET_CLS[dataset_name](
                 train=False, **data_cnf["dataset"], **model_cnf.get("dataset", {})
             )
-            #inv_w = get_inv_propensity(train_dataset.y)
-            mlb = get_mlb(train_dataset.le_path)
-            num_labels = len(mlb.classes_)
-            #cnt_y = train_dataset.y.sum(axis=0).A1
-
+        
         train_texts = np.array(
             [
                 " ".join(texts)
@@ -297,54 +292,55 @@ def get_dataset(
                 ),
             ]
         ) #tensor([False,  True,  True,  ...,  True,  True,  True])    
-        word_embedding_model = models.Transformer(
-            model_cnf["model"]["model_name"], max_seq_length=data_cnf["dataset"]["maxlen"]
-        )
-        embedding_size = word_embedding_model.get_word_embedding_dimension()
 
-        pooling_model = models.Pooling(
-            embedding_size,
-            pooling_mode=None,
-        )
-        sbert_pretrained = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-        
-        train_tokenized_texts = sbert_pretrained.tokenize(train_texts[train_mask])
-        #"input_ids" length : 150
-        # for i in range(5):
-        #     print(len(train_tokenized_texts["input_ids"][i]), len(train_tokenized_texts["attention_mask"][i]) )
-        valid_tokenized_texts = sbert_pretrained.tokenize(train_texts[~train_mask])
-        test_tokenized_texts = sbert_pretrained.tokenize(test_texts)
-        
-        train_dataset.x = train_tokenized_texts
-        train_dataset._split_indices = train_mask
+        if model_name == "SBert":
+            word_embedding_model = models.Transformer(
+                model_cnf["model"]["model_name"], max_seq_length=data_cnf["dataset"]["maxlen"]
+            )
+            embedding_size = word_embedding_model.get_word_embedding_dimension()
 
-        valid_dataset.x = valid_tokenized_texts
-        valid_dataset._split_indices = ~train_mask
+            pooling_model = models.Pooling(
+                embedding_size,
+                pooling_mode=None,
+            )
+            sbert_pretrained = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+            
+            train_tokenized_texts = sbert_pretrained.tokenize(train_texts[train_mask])
+            #"input_ids" length : 150
+            # for i in range(5):
+            #     print(len(train_tokenized_texts["input_ids"][i]), len(train_tokenized_texts["attention_mask"][i]) )
+            valid_tokenized_texts = sbert_pretrained.tokenize(train_texts[~train_mask])
+            test_tokenized_texts = sbert_pretrained.tokenize(test_texts)
+            
+            train_dataset.x = train_tokenized_texts
+            train_dataset._split_indices = train_mask
 
-        test_dataset.x = test_tokenized_texts
+            valid_dataset.x = valid_tokenized_texts
+            valid_dataset._split_indices = ~train_mask
 
-        if do_clustering: 
-            train_cluster_y, test_cluster_y, train_cluster_raw_y, test_cluster_raw_y, num_clusters, cluster_mlb = get_cluster(dataset_name, train_texts, train_dataset, test_dataset)
+            test_dataset.x = test_tokenized_texts
+        else:
+            train_dataset.x = train_dataset.x[train_mask]
+            train_dataset._split_indices = train_mask
 
-            train_dataset.y = train_cluster_y[train_mask]
-            train_dataset.raw_y = train_cluster_raw_y[train_mask]
+            valid_dataset.x = valid_dataset.x[~train_mask]
+            valid_dataset._split_indices = ~train_mask
 
-            valid_dataset.y = train_cluster_y[~train_mask]
-            valid_dataset.raw_y = train_cluster_raw_y[~train_mask]
+        train_cluster_y, test_cluster_y, train_cluster_raw_y, test_cluster_raw_y, num_clusters, cluster_mlb = get_cluster(dataset_name, train_texts, train_dataset, test_dataset)
 
-            test_dataset.y = test_cluster_y
-            test_dataset.raw_y = test_cluster_raw_y
+        train_dataset.y = train_cluster_y[train_mask]
+        train_dataset.raw_y = train_cluster_raw_y[train_mask]
 
-            num_labels = num_clusters
-            mlb = cluster_mlb
-        else: 
-            train_dataset.y = train_dataset.y[train_mask]
-            train_dataset.raw_y = train_dataset.raw_y[train_mask]
+        valid_dataset.y = train_cluster_y[~train_mask]
+        valid_dataset.raw_y = train_cluster_raw_y[~train_mask]
 
-            valid_dataset.y = valid_dataset.y[~train_mask]
-            valid_dataset.raw_y = valid_dataset.raw_y[~train_mask]
-        
-    else: 
+        test_dataset.y = test_cluster_y
+        test_dataset.raw_y = test_cluster_raw_y
+
+        num_labels = num_clusters
+        mlb = cluster_mlb
+
+    else:
         train_dataset, valid_dataset = DATASET_CLS[dataset_name].splits(
             test_size=data_cnf.get("valid_size", 200),
             **data_cnf["dataset"],

@@ -9,8 +9,8 @@ DATASET=EURLex-4K
 # DATASET=AmazonCat-1000
 # DATASET=Wiki10-3000
 
-MODEL=SBert
-# MODEL=AttentionRNN
+#MODEL=SBert
+MODEL=AttentionRNN
 # MODEL=CornetAttentionRNNv2
 # MODEL=LabelGCNAttentionRNN
 # MODEL=LabelGCNAttentionRNNv2
@@ -24,8 +24,9 @@ args=(
     --run-script $0
     #--test-run
     --no-scheduler
-    --epoch 60
-    --lr 1e-5
+    --epoch 100
+    --lr 1e-3
+    #1e-5
     # --eta-min 1e-5
     --train-batch-size 40
     --test-batch-size 100
@@ -36,7 +37,7 @@ args=(
     --eval-step 100
     --early 50
     --do-clustering
-    # --net-t ./checkpoint/label_emb_init_LabelGCNAttentionRNNv4_EURLex4K_1240_last.pt
+    #--net-t ./checkpoint/baseline_SBert_EURLex4K_7_last.pt
 )
 
 python main.py "${args[@]}"
