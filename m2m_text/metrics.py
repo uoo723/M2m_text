@@ -61,6 +61,10 @@ def get_precision_results(
         n3 = get_n_3(prediction, targets, mlb)
         n5 = get_n_5(prediction, targets, mlb)
 
+        r1 = get_r_1(prediction, targets, mlb)
+        r3 = get_r_3(prediction, targets, mlb)
+        r5 = get_r_5(prediction, targets, mlb)
+
         ret = {
             "p1": p1,
             "p3": p3,
@@ -68,6 +72,9 @@ def get_precision_results(
             "n1": n1,
             "n3": n3,
             "n5": n5,
+            "r1": r1,
+            "r3": r3,
+            "r5": r5,
         }
 
         if inv_w is not None:
@@ -181,3 +188,23 @@ get_psndcg_1 = partial(get_psndcg, top=1)
 get_psndcg_3 = partial(get_psndcg, top=3)
 get_psndcg_5 = partial(get_psndcg, top=5)
 get_psndcg_10 = partial(get_psndcg, top=10)
+
+
+def get_recall(
+    prediction: TPredict,
+    targets: TTarget,
+    mlb: TMlb = None,
+    top=5,
+) -> float:
+    if mlb is None:
+        mlb = MultiLabelBinarizer(sparse_output=True).fit(targets)
+    if not isinstance(targets, csr_matrix):
+        targets = mlb.transform(targets)
+    prediction = mlb.transform(prediction[:, :top])
+    return (prediction.multiply(targets).sum(axis=-1) / targets.sum(axis=-1)).mean()
+
+
+get_r_1 = partial(get_recall, top=1)
+get_r_3 = partial(get_recall, top=3)
+get_r_5 = partial(get_recall, top=5)
+get_r_10 = partial(get_recall, top=10)
