@@ -40,7 +40,7 @@ from .modules import (
     Readout,
     Residual,
 )
-from .utils.graph import get_ease_weight, stack_embed
+from .utils.graph import MultiLayerNeighborSampler, get_ease_weight, stack_embed
 
 
 class Network(nn.Module):
@@ -1229,8 +1229,8 @@ class LabelEncoder(nn.Module):
     def __init__(
         self,
         num_labels: int,
-        linear_size: List[int],
-        output_size: int,
+        linear_size: Optional[List[int]] = None,
+        output_size: Optional[int] = None,
         emb_size: Optional[int] = None,
         emb_init: Union[np.ndarray, str] = None,
         emb_trainable: bool = True,
@@ -1240,13 +1240,22 @@ class LabelEncoder(nn.Module):
         output_layer: Optional[nn.Module] = None,
     ):
         super().__init__()
+
+        assert not (
+            bool(linear_size) ^ bool(output_size)
+        ), "linear_size and output_size are both must be set or unset"
+
         self.mp_enabled = mp_enabled
 
         self.emb = LabelEmbedding(
             num_labels, emb_size, emb_init, emb_trainable, dropout
         )
-        self.layer_norm = nn.LayerNorm(emb_size) if enable_layer_norm else Identity
-        self.linear = MLLinear([emb_size] + linear_size, output_size, enable_layer_norm)
+        self.layer_norm = nn.LayerNorm(emb_size) if enable_layer_norm else Identity()
+        self.linear = (
+            MLLinear([emb_size] + linear_size, output_size, enable_layer_norm)
+            if linear_size
+            else Identity()
+        )
         self.output_layer = Identity() if output_layer is None else output_layer
 
     def forward(
@@ -1258,6 +1267,88 @@ class LabelEncoder(nn.Module):
         with torch.cuda.amp.autocast(enabled=mp_enabled):
             outputs = self.output_layer(self.linear(self.layer_norm(self.emb(inputs))))
         return outputs
+
+
+class LabelGINEncoder(nn.Module):
+    def __init__(
+        self,
+        graph: dgl.DGLGraph,
+        num_labels: int,
+        output_size: int,
+        hidden_size: List[int],
+        emb_size: Optional[int] = None,
+        emb_init: Union[np.ndarray, str] = None,
+        emb_trainable: bool = True,
+        dropout: bool = 0.2,
+        gin_aggregate_type: str = "sum",
+        fanouts: List[int] = [4, 3, 2],
+        mp_enabled: bool = False,
+    ):
+        super().__init__()
+        self.graph = graph
+        self.mp_enabled = mp_enabled
+
+        self.sampler = MultiLayerNeighborSampler(fanouts)
+
+        self.emb = LabelEmbedding(
+            num_labels, emb_size, emb_init, emb_trainable, dropout
+        )
+
+        linear_size = [self.emb.emb.embedding_dim] + hidden_size + [output_size]
+
+        assert len(linear_size) - 1 == len(
+            fanouts
+        ), "# of GIN layers and # of fanouts must be same."
+
+        self.attention = MLAttention2(1, output_size)
+
+        self.conv_list = nn.ModuleList(
+            GINConv(nn.Linear(in_s, out_s), gin_aggregate_type, learn_eps=True)
+            for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
+        )
+
+        self.residual_list = nn.ModuleList(
+            nn.Sequential(
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                Residual(output_size, output_size, dropout),
+            )
+            for _ in range(len(linear_size) - 1)
+        )
+
+    def forward(
+        self, inputs: torch.Tensor, mp_enabled: Optional[bool] = None
+    ) -> torch.Tensor:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        device = inputs.device
+        hidden_list = []
+
+        inputs = inputs.cpu()
+        input_ids, counts = torch.unique_consecutive(
+            inputs[inputs.argsort()], return_counts=True
+        )
+
+        blocks = self.sampler.sample_blocks(self.graph, input_ids)
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            h = self.emb(blocks[0].srcdata["_ID"].to(device))
+
+            for conv, residual, block in zip(
+                self.conv_list, self.residual_list, blocks
+            ):
+                h = conv(block.to(device), h)
+                h = residual(h)
+                hidden_list.append(h)
+
+            stacked_hidden = stack_embed(
+                blocks, blocks[-1].dstdata["_ID"], hidden_list
+            )  # N x num_layer x hidden_size
+
+            outputs = self.attention(stacked_hidden).squeeze()
+
+        return outputs[np.repeat(np.arange(counts.shape[0]), counts)][inputs.argsort()]
 
 
 class SBert(nn.Module):
