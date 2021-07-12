@@ -1,0 +1,5 @@
+name: SBert
+
+model:
+  model_name: roberta-base
+  max_seq_length: 150

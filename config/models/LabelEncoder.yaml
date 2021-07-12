@@ -1,0 +1,6 @@
+name: LabelEncoder
+
+model:
+  emb_size: 768
+  emb_trainable: true
+  enable_layer_norm: false
