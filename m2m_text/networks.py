@@ -1355,14 +1355,18 @@ class SBert(nn.Module):
     def __init__(
         self,
         model_name: str,
-        num_labels: int,
-        linear_size: List[int],
+        num_labels: Optional[int] = None,
+        linear_size: Optional[List[int]] = None,
         mp_enabled: bool = False,
         max_seq_length: int = 150,
         pooling_mode: Optional[str] = None,
         output_layer: Optional[nn.Module] = None,
     ):
         super().__init__()
+
+        assert not (
+            bool(num_labels) ^ bool(linear_size)
+        ), "num_labels and linear_size are both must be set or unset"
 
         self.mp_enabled = mp_enabled
 
@@ -1377,7 +1381,11 @@ class SBert(nn.Module):
             pooling_mode=pooling_mode,
         )
         self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-        self.linear = MLLinear([embedding_size] + linear_size, num_labels)
+        self.linear = (
+            MLLinear([embedding_size] + linear_size, num_labels)
+            if num_labels is not None
+            else None
+        )
         self.output_layer = Identity() if output_layer is None else output_layer
 
     def forward(

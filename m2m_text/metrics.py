@@ -62,8 +62,8 @@ def get_precision_results(
         n5 = get_n_5(prediction, targets, mlb)
 
         r1 = get_r_1(prediction, targets, mlb)
-        r3 = get_r_3(prediction, targets, mlb)
         r5 = get_r_5(prediction, targets, mlb)
+        r10 = get_r_10(prediction, targets, mlb)
 
         ret = {
             "p1": p1,
@@ -73,8 +73,8 @@ def get_precision_results(
             "n3": n3,
             "n5": n5,
             "r1": r1,
-            "r3": r3,
             "r5": r5,
+            "r10": r10,
         }
 
         if inv_w is not None:

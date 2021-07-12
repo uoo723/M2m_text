@@ -2,6 +2,7 @@
 Created on 2021/01/08
 @author Sangwoo Han
 """
+from .sbert import SBertDataset
 from .sparse import RCV1
 from .text import (
     AmazonCat,
@@ -25,4 +26,5 @@ __all__ = [
     "Wiki10",
     "AmazonCat13K",
     "Wiki10_31K",
+    "SBertDataset",
 ]

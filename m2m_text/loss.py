@@ -47,8 +47,8 @@ class CosineSimilarityLoss(nn.Module):
 class CircleLoss(nn.Module):
     def __init__(
         self,
-        m: float = 0.25,
-        gamma: float = 256,
+        m: float = 0.15,
+        gamma: float = 1.0,
         distance_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
     ) -> None:
         super(CircleLoss, self).__init__()

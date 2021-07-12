@@ -8,7 +8,8 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
+from torch.cuda.amp import GradScaler
+from torch.optim import Optimizer, optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
 TModel = Union[nn.DataParallel, nn.Module]
@@ -17,24 +18,44 @@ TModel = Union[nn.DataParallel, nn.Module]
 def save_checkpoint(
     ckpt_path: str,
     model: TModel,
-    optim: Optimizer,
-    results: dict,
     epoch: int,
+    label_encoder: Optional[TModel] = None,
+    optim: Optional[Optimizer] = None,
+    scaler: Optional[GradScaler] = None,
     scheduler: Optional[_LRScheduler] = None,
+    results: Optional[dict] = None,
     other_states: dict = {},
-):
+) -> None:
     if isinstance(model, nn.DataParallel):
         model = model.module
 
-    state = {
-        "net": model.state_dict(),
-        "optimizer": optim.state_dict(),
-        "results": results,
-        "epoch": epoch,
-        "rng_state": (torch.get_rng_state(), np.random.get_state(), random.getstate()),
-        **({} if scheduler is None else {"scheduler": scheduler.state_dict()}),
-        "other_states": other_states,
-    }
+    state = {"net": model.state_dict()}
+    state["epoch"] = epoch
+
+    state["rng_state"] = (
+        torch.get_rng_state(),
+        np.random.get_state(),
+        random.getstate(),
+    )
+
+    if label_encoder is not None:
+        if isinstance(label_encoder, nn.DataParallel):
+            label_encoder = label_encoder.module
+        state["le"] = label_encoder.state_dict()
+
+    if optim is not None:
+        state["optim"] = optim.state_dict()
+
+    if scaler is not None:
+        state["scaler"] = scaler.state_dict()
+
+    if scheduler is not None:
+        state["scheduler"] = scheduler.state_dict()
+
+    if results is not None:
+        state["results"] = None
+
+    state["other_states"] = other_states
 
     torch.save(state, ckpt_path)
 
@@ -42,7 +63,9 @@ def save_checkpoint(
 def load_checkpoint(
     ckpt_path: str,
     model: Optional[TModel] = None,
+    label_encoder: Optional[TModel] = None,
     optim: Optional[Optimizer] = None,
+    scaler: Optional[GradScaler] = None,
     scheduler: Optional[_LRScheduler] = None,
     set_rng_state: bool = True,
     return_other_states: bool = False,
@@ -56,8 +79,17 @@ def load_checkpoint(
 
         model.load_state_dict(ckpt["net"])
 
+    if label_encoder is not None and "le" in ckpt:
+        if isinstance(label_encoder, nn.DataParallel):
+            label_encoder = label_encoder.module
+
+        label_encoder.load_state_dict(ckpt["le"])
+
     if optim and "optimizer" in ckpt:
         optim.load_state_dict(ckpt["optimizer"])
+
+    if scaler is not None and "scaler" in ckpt:
+        scaler.load_state_dict(ckpt["scaler"])
 
     if scheduler and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
