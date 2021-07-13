@@ -696,6 +696,7 @@ def main(
     train_losses = deque(maxlen=print_step)
 
     if resume:
+        logger.info("Resume Training")
         start_epoch, ckpt = load_checkpoint(
             last_ckpt_path,
             model,
@@ -707,6 +708,7 @@ def main(
             True,
         )
 
+        start_epoch += 1
         global_step = ckpt["global_step"]
         gradient_norm_queue = ckpt["gradient_norm_queue"]
         sbert_swa_state = ckpt["sbert_swa_state"]
@@ -812,6 +814,7 @@ def main(
                                         "le_swa_state": le_swa_state,
                                         "global_step": global_step,
                                         "early_criterion": early_criterion,
+                                        "gradient_norm_queue": gradient_norm_queue,
                                         "e": e,
                                     },
                                 )
@@ -863,6 +866,7 @@ def main(
                 "le_swa_state": le_swa_state,
                 "global_step": global_step,
                 "early_criterion": early_criterion,
+                "gradient_norm_queue": gradient_norm_queue,
                 "e": e,
             },
         )
