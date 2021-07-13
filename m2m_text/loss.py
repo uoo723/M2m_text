@@ -45,6 +45,11 @@ class CosineSimilarityLoss(nn.Module):
 
 
 class CircleLoss(nn.Module):
+    """Implementaion of Circle loss
+
+    Paper: https://openaccess.thecvf.com/content_CVPR_2020/papers/Sun_Circle_Loss_A_Unified_Perspective_of_Pair_Similarity_Optimization_CVPR_2020_paper.pdf
+    """
+
     def __init__(
         self,
         m: float = 0.15,
@@ -75,6 +80,45 @@ class CircleLoss(nn.Module):
 
         loss = self.soft_plus(
             torch.logsumexp(logit_n, dim=0) + torch.logsumexp(logit_p, dim=0)
+        )
+
+        return loss
+
+
+class CircleLossv2(nn.Module):
+    """Implementaion of Circle loss supporting n-pairs"""
+
+    def __init__(
+        self,
+        m: float = 0.15,
+        gamma: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.m = m
+        self.gamma = gamma
+
+    def forward(
+        self, anchor: torch.Tensor, pos: torch.Tensor, neg: torch.Tensor
+    ) -> torch.Tensor:
+        anchor = F.normalize(anchor, dim=-1)
+        pos = F.normalize(pos, dim=-1)
+        neg = F.normalize(neg, dim=-1)
+
+        sp = (anchor.unsqueeze(1) @ pos.transpose(2, 1)).squeeze()
+        sn = (anchor.unsqueeze(1) @ neg.transpose(2, 1)).squeeze()
+
+        ap = torch.clamp_min(-sp.detach() + 1 + self.m, min=0.0)
+        an = torch.clamp_min(sn.detach() + self.m, min=0.0)
+
+        delta_p = 1 - self.m
+        delta_n = self.m
+
+        logit_p = -ap * (sp - delta_p) * self.gamma
+        logit_n = an * (sn - delta_n) * self.gamma
+
+        loss = (
+            F.softplus(torch.logsumexp(logit_p, dim=-1)).mean()
+            + F.softplus(torch.logsumexp(logit_n, dim=-1)).mean()
         )
 
         return loss

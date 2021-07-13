@@ -30,7 +30,7 @@ from tqdm.auto import tqdm
 from m2m_text.anns import HNSW
 from m2m_text.datasets import EURLex4K, Wiki10_31K
 from m2m_text.datasets.sbert import SBertDataset, collate_fn
-from m2m_text.loss import CircleLoss
+from m2m_text.loss import CircleLoss, CircleLossv2
 from m2m_text.metrics import get_inv_propensity, get_precision_results
 from m2m_text.networks import LabelEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
@@ -95,9 +95,7 @@ def sample_pos_neg(
     positives = []
     negatives = []
 
-    _, neigh_indices = ann.kneighbors(
-        inputs, ann_candidates, search_by_id=search_by_id
-    )
+    _, neigh_indices = ann.kneighbors(inputs, ann_candidates, search_by_id=search_by_id)
 
     for i, y in enumerate(batch_y):
         pos = y.nonzero(as_tuple=True)[0].numpy()
@@ -162,9 +160,6 @@ def get_embeddings(
 ) -> np.ndarray:
     model.eval()
 
-    tokenize = (
-        model.module.tokenize if isinstance(model, nn.DataParallel) else model.tokenize
-    )
     idx = []
     embedding = []
 
@@ -172,9 +167,7 @@ def get_embeddings(
         idx.append(doc_ids.numpy())
         with torch.no_grad():
             embedding.append(
-                model(to_device(batch_x, device), mp_enabled=False)[0]
-                .cpu()
-                .numpy()
+                model(to_device(batch_x, device), mp_enabled=False)[0].cpu().numpy()
             )
     idx = np.concatenate(idx)
     embedding = np.concatenate(embedding)
@@ -242,6 +235,7 @@ def make_batch(
     hard_neg_max_num_samples: int,
     inv_w: Optional[np.ndarray] = None,
     weight_pos_sampling: bool = False,
+    is_n_pairs: bool = False,
     device: torch.device = torch.device("cpu"),
 ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
     def _make_inputs():
@@ -269,12 +263,16 @@ def make_batch(
         weight_pos_sampling=weight_pos_sampling,
     )
 
-    positive = pos_ids.ravel()
-    negative = neg_ids.ravel()
-
-    anchor = np.array(
-        [i for i in range(batch_size) for _ in range(pos_max_num_samples)]
-    )
+    if is_n_pairs:
+        anchor = np.arange(batch_size)
+        positive = pos_ids
+        negative = neg_ids
+    else:
+        anchor = np.array(
+            [i for i in range(batch_size) for _ in range(pos_max_num_samples)]
+        )
+        positive = pos_ids.ravel()
+        negative = neg_ids.ravel()
 
     assert (
         anchor.shape[0] == positive.shape[0]
@@ -311,6 +309,7 @@ def train_step(
     gradient_norm_queue: Optional[deque] = None,
 ):
     model.train(is_train)
+    label_encoder.train(is_train)
     mp_enabled = scaler is not None
 
     with torch.set_grad_enabled(is_train):
@@ -494,6 +493,12 @@ def get_optimizer(
     default=3,
     help="# of hard negative samples",
 )
+@click.option(
+    "--loss-name",
+    type=click.Choice(["circle", "circle2"]),
+    default="circle",
+    help="Loss function",
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -526,6 +531,7 @@ def main(
     pos_num_samples: int,
     neg_num_samples: int,
     hard_neg_num_samples: int,
+    loss_name: str,
 ):
 
     yaml = YAML(typ="safe")
@@ -677,7 +683,11 @@ def main(
     optimizer = get_optimizer(model, label_encoder, lr, decay, le_lr, le_decay)
     scheduler = None
     scaler = GradScaler() if mp_enabled else None
-    criterion = CircleLoss(m=0.15, gamma=1.0)
+    criterion = (
+        CircleLoss(m=0.15, gamma=1.0)
+        if loss_name == "circle"
+        else CircleLossv2(m=0.15, gamma=1.0)
+    )
     gradient_clip_value = 5.0
     gradient_norm_queue = deque([np.inf], maxlen=5)
     sbert_swa_state = {}
@@ -747,6 +757,7 @@ def main(
                         hard_neg_num_samples,
                         #                 inv_w,
                         weight_pos_sampling=True,
+                        is_n_pairs=loss_name == "circle2",
                         device=device,
                     ):
                         train_loss = train_step(

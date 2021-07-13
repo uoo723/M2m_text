@@ -30,7 +30,7 @@ args=(
     # --test-run
     $LOG_DIR
     $CKPT_ROOT_PATH
-    --num-epochs 50
+    --num-epochs 100
     # --lr 1e-5
     --train-batch-size 64
     --test-batch-size 128
@@ -40,6 +40,13 @@ args=(
     --swa-warmup 980
     --eval-step 300
     --early 30
+    --pos-num-samples 5
+    --neg-num-samples 0
+    --hard-neg-num-samples 5
+    --mp-enabled
+    --loss-name 'circle2'
+    # --freeze-model
+    # --resume
 )
 
 python main2.py "${args[@]}"
