@@ -13,7 +13,10 @@ from torch.optim.lr_scheduler import _LRScheduler
 
 TModel = Union[nn.DataParallel, nn.Module]
 
-
+"""
+    1. save_checkpoint : train.py에서 등장. 모델 저장하기 
+    2. load_checkpoint : main.py에서 등장. 모델 불러오기
+"""
 def save_checkpoint(
     ckpt_path: str,
     model: TModel,
@@ -23,9 +26,11 @@ def save_checkpoint(
     scheduler: Optional[_LRScheduler] = None,
     other_states: dict = {},
 ):
-    if isinstance(model, nn.DataParallel):
+    if isinstance(model, nn.DataParallel):#해당 모델이 nn.DataParallel이냐 
         model = model.module
-
+    #추론, 학습 재개를 위해 그냥 model만 저장하기 보다는, 다음과 같이 저장하는 것을 권장함
+    #불러올 때는 key로 저장한 것을 그대로 일일이 불어와야 함. 
+    #state_dict는 각 계층 등이 학습 가능한 매개변수 텐서로 매핑되는 사전 (dict) 객체를 말함. 
     state = {
         "net": model.state_dict(),
         "optimizer": optim.state_dict(),
@@ -47,7 +52,7 @@ def load_checkpoint(
     set_rng_state: bool = True,
     return_other_states: bool = False,
     **torch_load_args,
-) -> int:
+) -> int: #리턴 타입에 대한 주석
     print(f"ckpt:{ckpt_path}")
     ckpt = torch.load(ckpt_path, **torch_load_args)
 
