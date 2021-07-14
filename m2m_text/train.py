@@ -110,7 +110,7 @@ def train(
     mlb = data_mlb
 
     for epoch in range(start_epoch, epochs):
-        if epoch == swa_warmup:
+        if epoch == swa_warmup: #default 10으로 되어 있음. 
             swa_init(model, swa_state)
 
         # adjust_learning_rate(optimizer, lr_init, epoch)
@@ -169,7 +169,7 @@ def train(
                     "global_step": global_step,
                 }
 
-                if results[early_criterion] > best:
+                if results[early_criterion] > best: #best 성능을 갱신할 때마다 best 모델에 저장. 
                     save_checkpoint(
                         ckpt_path,
                         model,
@@ -189,7 +189,7 @@ def train(
                         last_ckpt_path, ext = os.path.splitext(ckpt_path)
                         last_ckpt_path += "_last" + ext
 
-                        save_checkpoint(
+                        save_checkpoint(  #best 성능을 갱신하지 못했을 시, last 모델에 저장 
                             last_ckpt_path,
                             model,
                             optimizer,
@@ -216,7 +216,7 @@ def train(
         if scheduler is not None:
             scheduler.step()
 
-        save_checkpoint(
+        save_checkpoint( #1 epoch을 다 돌 때마다 last로 모델에 저장 
             last_ckpt_path,
             model,
             optimizer,
