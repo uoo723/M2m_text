@@ -22,32 +22,38 @@ class Identity(nn.Module):
 
 
 class Embedding(nn.Module):
+    """
+        networks.py의 Network 클래스에서 사용됨 
+    """
     def __init__(
         self,
-        vocab_size: Optional[int] = None,
+        vocab_size: Optional[int] = None, #Optional: None을 허용
         emb_size: Optional[int] = None,
-        emb_init: Optional[Union[np.ndarray, str]] = None,
+        emb_init: Optional[Union[np.ndarray, str]] = None, #Union: 여러 타입을 허용
         emb_trainable: bool = True,
         padding_idx: int = 0,
         dropout: bool = 0.2,
     ):
         super(Embedding, self).__init__()
-        if emb_init is not None:
+        #nn.Module 클래스의 __init__()에 있는 클래스 변수들을 가져오기
+        #super을 사용하지 않으면 nn.Module 클래스의 __init__()가 자식 클래스의 그것에 의해 Overriding이 됩니다. 
+        
+        if emb_init is not None: #이미 초기화된 임베딩이 있는 경우 
             if type(emb_init) == str:
                 emb_init = np.load(emb_init)
-            if vocab_size is not None:
+            if vocab_size is not None: #이미 초기화된 임베딩의 행은 vocab_size와 같아야 한다. 
                 assert vocab_size == emb_init.shape[0]
-            if emb_size is not None:
+            if emb_size is not None: #이미 초기화된 임베딩의 열은 embed_size와 같아야 한다.
                 assert emb_size == emb_init.shape[1]
             vocab_size, emb_size = emb_init.shape
         self.emb = nn.Embedding(
             vocab_size,
             emb_size,
-            padding_idx=padding_idx,
-            sparse=True,
+            padding_idx=padding_idx, #padding_idx에 해당하는 idx는 zero vector로 생성한다. 
+            sparse=True, #true이면, net.parameters.grad에서 0값이 아닌 것만 weight 업데이트 되도록 함. 
             _weight=torch.from_numpy(emb_init).float()
             if emb_init is not None
-            else None,
+            else None, #_weight는 emb_init이 있으면 넣고 없으면 None으로 넣기. 
         )
         self.emb.weight.requires_grad = emb_trainable
         self.dropout = nn.Dropout(dropout)
@@ -58,7 +64,12 @@ class Embedding(nn.Module):
         lengths, masks = (inputs != self.padding_idx).sum(
             dim=-1
         ), inputs != self.padding_idx
+        # lengths: (inputs != self.padding_idx).sum(dim=-1), pad index를 제외한 input의 길이
+        # masks: inputs != self.padding_idx, pad index가 아닌 것은 True 그렇지 않으면 False로 출력됨.
         return emb_out[:, : inputs.size(-1)], lengths, masks[:, : inputs.size(-1)]
+        #출력 1. embedding -> dropout을 거친 결과값에서 기존 embedding dim을 무시?하고 원래 input에서 들어왔던 dim으로 가져감
+        #출력 2. pad index를 제외한 input의 길이 
+        #출력 3. pad index가 아닌 것은 True 그렇지 않으면 False로 출력되는데, 기존 embedding dim을 무시?하고 원래 input에서 들어왔던 dim으로 가져감
 
 
 class LabelEmbedding(nn.Module):
