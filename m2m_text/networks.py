@@ -36,6 +36,7 @@ from .modules import (
     LSTMEncoder,
     MLAttention,
     MLAttention2,
+    MLAttentionForSBert,
     MLLinear,
     Readout,
     Residual,
@@ -1364,6 +1365,10 @@ class SBert(nn.Module):
     ):
         super().__init__()
 
+        if pooling_mode is not None:
+            pooling_mode = pooling_mode.lower()
+            assert pooling_mode in ["mean", "max", "cls", "att"]
+
         assert not (
             bool(num_labels) ^ bool(linear_size)
         ), "num_labels and linear_size are both must be set or unset"
@@ -1376,10 +1381,14 @@ class SBert(nn.Module):
 
         embedding_size = word_embedding_model.get_word_embedding_dimension()
 
-        pooling_model = models.Pooling(
-            embedding_size,
-            pooling_mode=pooling_mode,
-        )
+        if pooling_mode == "att":
+            pooling_model = MLAttentionForSBert(1, embedding_size)
+        else:
+            pooling_model = models.Pooling(
+                embedding_size,
+                pooling_mode=pooling_mode,
+            )
+
         self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
         self.linear = (
             MLLinear([embedding_size] + linear_size, num_labels)

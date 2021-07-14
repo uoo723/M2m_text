@@ -5,7 +5,7 @@ Created on 2020/12/31
 @author Sangwoo Han
 """
 
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import dgl
 import dgl.function as fn
@@ -165,6 +165,29 @@ class MLAttention2(nn.Module):
         attn = (inputs @ attn_weight.T).transpose(1, 2)  # N, num_labels, L
         attn = F.softmax(attn, -1)
         return attn @ inputs  # N, num_labels, hidden_size
+
+
+class MLAttentionForSBert(nn.Module):
+    def __init__(self, num_embeddings: int, hidden_size: int):
+        super().__init__()
+        self.attention = nn.Linear(hidden_size, num_embeddings, bias=False)
+        nn.init.xavier_uniform_(self.attention.weight)
+
+    def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        token_embeddings = features["token_embeddings"]
+        attention_mask = features["attention_mask"].bool()
+
+        attention_mask = torch.unsqueeze(attention_mask, 1)  # N, 1, L
+        attention = (
+            self.attention(token_embeddings)
+            .transpose(1, 2)
+            .masked_fill(~attention_mask, -np.inf)
+        )  # N, num_embeddings, L
+        attention = F.softmax(attention, -1)
+
+        # N, num_embeddings, hidden_size
+        features["sentence_embedding"] = (attention @ token_embeddings).squeeze()
+        return features
 
 
 class MLLinear(nn.Module):

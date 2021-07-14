@@ -559,6 +559,9 @@ def main(
     log_filename = os.path.splitext(ckpt_name)[0] + ".log"
 
     if not test_run:
+        logfile_path = os.path.join(log_dir, log_filename)
+        if os.path.exists(logfile_path) and not resume:
+            os.remove(logfile_path)
         set_logger(os.path.join(log_dir, log_filename))
 
     if seed is not None:
@@ -705,7 +708,7 @@ def main(
 
     train_losses = deque(maxlen=print_step)
 
-    if resume:
+    if resume and os.path.exists(last_ckpt_path):
         logger.info("Resume Training")
         start_epoch, ckpt = load_checkpoint(
             last_ckpt_path,
@@ -788,7 +791,9 @@ def main(
                             swa_init(label_encoder, le_swa_state)
 
                         val_log_msg = ""
-                        if global_step % eval_step == 0:
+                        if global_step % eval_step == 0 or (
+                            epoch == num_epochs - 1 and i == len(train_dataloader)
+                        ):
                             results = get_results(
                                 model,
                                 valid_dataloader,
@@ -846,6 +851,7 @@ def main(
                         if (
                             global_step % print_step == 0
                             or global_step % eval_step == 0
+                            or (epoch == num_epochs - 1 and i == len(train_dataloader))
                         ):
                             log_msg = f"{epoch} {i * train_dataloader.batch_size} "
                             log_msg += f"early stop: {e} "
