@@ -119,10 +119,16 @@ GCN_MODELS = [
     # "LabelGCNAttentionRNNv5",
 ]
 
-
+#decorator
 def log_elapsed_time(func):
+    '''함수 실행 전후 시간차를 구해 함수를 실행하는 데 걸린 시간 기록'''
     @wraps(func)
+    #decorator debugging을 쉽게 하기 위해 @wraps 이용.
+    #데코레이터를 작성하는 데 이용하는 데코레이터.
+    #내부함수(func)에 있는 중요 메타데이터를 모두 외부함수(log_elapsed_time)로 복사해줌. 
+    #파이썬 함수의 여러 표준 속성(__doc__, __name__, __help__)들을 보호.  
     def wrapper(*args, **kwargs):
+        #*args: 여러 개의 인자를 튜플로 저장 **kwargs: 여러개의 key=value를 dictionary로 저장 
         start = time.time()
         ret = func(*args, **kwargs)
         end = time.time()
@@ -140,7 +146,7 @@ def set_mlflow_status(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except KeyboardInterrupt as e:
+        except KeyboardInterrupt as e: # cntrl + c로 종료시 exception
             run = mlflow.active_run()
             if run is not None:
                 mlflow.end_run("KILLED")
@@ -155,7 +161,10 @@ def set_mlflow_status(func):
 
 
 def set_logger(log_path: str):
+    #exist_ok=True:이미 해당 디렉토리가 존재하는 경우 무시하고 넘어감, 없을 경우 새로 생성. 
+    #os.path.dirname:해당 파일 또는 폴더가 속한 상위 폴더의 경로 표시 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    # start writing into a logfile 
     logzero.logfile(log_path)
 
 
@@ -177,6 +186,13 @@ def load_model(
     verbose: bool = False,
 ):
     model_cnf = copy.deepcopy(model_cnf)
+    #dict: mutable한 type
+    #shallow copy,, copy.copy: 변수간 대입..ex) a = b 
+        #*mutable한 객체(list, set 등)의 경우: copy 후 b 재할당 시 a, b가 같이 바뀜 (메모리 주소 같음)
+        #*immutable한 객체(tuple, str 등)의 경우: copy 후 b 재할당 시 b만 바뀜 (메모리 주소 다름)
+
+    #deep copy 
+        #mutable한 객체를 immutable한 객체처럼 메모리 주소를 다르게 할당해줌. 
 
     model_cnf["model"]["max_length"] = data_cnf["dataset"]["maxlen"]
 
@@ -185,7 +201,7 @@ def load_model(
         network = MODEL_CLS[model_name].from_pretrained(
             pretrained_model_name, num_labels=num_labels, **model_cnf["model"]
         )
-    else:
+    else: #transformer 기반 모델이 아니면 {data}.npy 임베딩으로 초기화. 
         model_cnf["model"]["emb_init"] = data_cnf["model"]["emb_init"]
 
         if model_name == "EaseAttentionRNN":
@@ -525,7 +541,7 @@ def get_cluster(dataset_name, train_tokenized_texts, train_dataset, test_dataset
     help="Early stopping criterion",
 )
 @click.option(
-    "--do-clustering", is_flag=True, default=False, help="Do clustering")
+    "--do-clustering", is_flag=True, default=False, help="Do clustering") #is_flag이기 때문에 .sh에 값을 넣지 않아도 True로 인식함.
 @log_elapsed_time
 @set_mlflow_status
 def main(
@@ -536,9 +552,9 @@ def main(
     model_cnf,
     data_cnf,
     run_script,
-    ckpt_root_path,
-    ckpt_name,
-    net_t,
+    ckpt_root_path,# "./checkpoint"
+    ckpt_name,# "baseline" etc.
+    net_t,# Checkpoint path of training network
     num_workers,
     no_cuda,
     train_batch_size,
@@ -557,8 +573,8 @@ def main(
 ):
     yaml = YAML(typ="safe")
 
-    model_cnf_path = model_cnf
-    data_cnf_path = data_cnf
+    model_cnf_path = model_cnf #hidden_size, num_layer, dropout 등이 저장되어 있음. 
+    data_cnf_path = data_cnf #max_len, valid_size 등이 저장되어 있음. 
 
     model_cnf = yaml.load(Path(model_cnf))
     data_cnf = yaml.load(Path(data_cnf))
@@ -643,6 +659,8 @@ def main(
         criteron = nn.BCEWithLogitsLoss() if multi_label else nn.CrossEntropyLoss()
         optimizer = get_optimizer(model_name, network, lr, decay)
         if not no_scheduler:
+            #lr이 eta_min까지 떨어졌다 다시 초기 lr까지 올라온다. 
+            #lr은 T_max*2 단위로 반복한다. 
             scheduler = CosineAnnealingLR(
                 optimizer, T_max=max(3, epoch // 10), eta_min=eta_min
             )
@@ -664,7 +682,7 @@ def main(
         train(
             network,
             device,
-            test_run,
+            test_run, #Test run mode for debug
             start_epoch,
             epoch,
             optimizer,
