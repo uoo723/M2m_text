@@ -437,7 +437,6 @@ class EURLex(TextDataset):
         elif type(self.texts) == dict:
             texts = dict()
             for key in self.texts.keys():
-                #print(key)
                 texts[key] = self.texts.get(key)[index] 
         else:
             texts = torch.from_numpy(self.texts[index])
@@ -643,6 +642,10 @@ class Wiki10(TextDataset):
     def __getitem__(self, index: int) -> Tuple[TDataXTensor, TDataYTensor]:
         if type(self.texts) == tuple:
             texts = tuple(torch.from_numpy(text[index]) for text in self.texts)
+        elif type(self.texts) == dict:
+            texts = dict()
+            for key in self.texts.keys():
+                texts[key] = self.texts.get(key)[index] 
         else:
             texts = torch.from_numpy(self.texts[index])
 
@@ -678,7 +681,7 @@ class Wiki10(TextDataset):
 
 
 class Wiki10_31K(Wiki10):
-    base_folder = "Wiki10-31K"
+    base_folder = "Wiki10_31K"
 
     url = "https://drive.google.com/uc?id=1PQ0_BM6Zrn_UG7atXrLxfRQBYLylZDjK"
 

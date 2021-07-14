@@ -127,6 +127,8 @@ get_n_10 = partial(get_ndcg, top=10)
 
 
 def get_inv_propensity(train_y: csr_matrix, a=0.55, b=1.5) -> np.ndarray:
+    # n : train data 개수
+    # number : train data에 대해서 label 마다 등장한 횟수 
     n, number = train_y.shape[0], np.asarray(train_y.sum(axis=0)).squeeze()
     c = (np.log(n) - 1) * ((b + 1) ** a)
     return 1.0 + c * (number + b) ** (-a)

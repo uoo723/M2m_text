@@ -52,7 +52,7 @@ def train_step(
             outputs = model(inputs= data_x, return_linear=True)
         else:
             outputs = model(data_x)
-
+    
     loss = criterion(outputs, data_y)
 
     optimizer.zero_grad()

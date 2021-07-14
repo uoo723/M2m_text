@@ -109,7 +109,7 @@ DATASET_CLS = {
     "Wiki10_31K": Wiki10_31K,
 }
 
-MULTI_LABEL_DATASETS = ["EURLex", "EURLex4K", "AmazonCat", "Wiki10"]
+MULTI_LABEL_DATASETS = ["EURLex", "EURLex4K", "AmazonCat", "Wiki10", "Wiki10_31K"]
 
 GCN_MODELS = [
     "LabelGCNAttentionRNN",
@@ -377,7 +377,7 @@ def get_cluster(dataset_name, train_tokenized_texts, train_dataset, test_dataset
     sparse_x = get_sparse_features(filepath, train_tokenized_texts, force=False) #shape (data 개수, corpus 개수)
     sparse_y = train_dataset.y
     labels_f = normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x)) # (data 개수, label 개수).T x (data 개수, corpus 개수) = (label 개수, corpus 개수)
-    clusters = get_clusters(labels_f, levels=[9], verbose=True)
+    clusters = get_clusters(labels_f, levels=[11], verbose=True)
 
     cluster = clusters[0] #index = cluster, value = label_ids 
 

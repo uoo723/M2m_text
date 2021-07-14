@@ -3,13 +3,14 @@
 # export MLFLOW_TRACKING_URI=http://115.145.135.65:5050
 # export MLFLOW_EXPERIMENT_NAME=Cornet
 
-DATASET=EURLex-4K
+DATASET=Wiki10_31K
+#DATASET=EURLex-4K
 # DATASET=AmazonCat13K
 # DATASET=Wiki1-31K
 # DATASET=AmazonCat-1000
 # DATASET=Wiki10-3000
 
-#MODEL=SBert
+# MODEL=SBert
 MODEL=AttentionRNN
 # MODEL=CornetAttentionRNNv2
 # MODEL=LabelGCNAttentionRNN
@@ -19,6 +20,7 @@ MODEL=AttentionRNN
 # MODEL=EaseAttentionRNN
 
 args=(
+    #--mode eval
     --model-cnf config/models/$MODEL.yaml
     --data-cnf config/datasets/$DATASET.yaml
     --run-script $0
@@ -30,14 +32,14 @@ args=(
     # --eta-min 1e-5
     --train-batch-size 40
     --test-batch-size 100
-    --ckpt-name baseline
+    --ckpt-name lvl11
     --early-criterion 'n5'
     --seed $1
     --swa-warmup 10
     --eval-step 100
     --early 50
     --do-clustering
-    #--net-t ./checkpoint/baseline_SBert_EURLex4K_7_last.pt
+    #--net-t ./checkpoint/baseline_SBert_Wiki10_31K_17.pt
 )
 
 python main.py "${args[@]}"

@@ -48,6 +48,7 @@ def load_checkpoint(
     return_other_states: bool = False,
     **torch_load_args,
 ) -> int:
+    print(f"ckpt:{ckpt_path}")
     ckpt = torch.load(ckpt_path, **torch_load_args)
 
     if model is not None and "net" in ckpt:
