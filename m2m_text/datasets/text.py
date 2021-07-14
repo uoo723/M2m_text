@@ -143,14 +143,14 @@ class TextDataset(Dataset):
         )
 
     def _load_data_bert(self, npz_path: str) -> Tuple[TDataX, TDataY]:
-        if os.path.isfile(npz_path):
+        if os.path.isfile(npz_path): # input_ids, attention_mask, labels이 이미 전처리 되어 있는 .npz 파일이 있는 경우 
             with np.load(npz_path, allow_pickle=True) as npz:
                 input_ids, attention_mask, labels = (
                     npz["input_ids"],
                     npz["attention_mask"],
                     npz["labels"],
                 )
-        else:
+        else: #없는 경우
             tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_model_name)
             texts, labels = self.raw_data()
 
