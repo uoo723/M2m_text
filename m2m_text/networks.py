@@ -94,6 +94,7 @@ class AttentionRNN(Network):
         rnn_training=False,
         **kwargs,
     ):
+        #return과 pass는 둘 다 True일 수 없음. 
         if return_emb and pass_emb:
             raise ValueError("`return_emb` and `pass_emb` both cannot be True")
 
@@ -114,25 +115,52 @@ class AttentionRNN(Network):
             "pass_hidden": pass_hidden,
             "pass_attn": pass_attn,
         }
-
-        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
+        #return과 pass내에서 emb, hidden, attn 중 두 개가 둘 다 True일 수 없음.  
+        for kw1, kw2 in combinations(return_kwargs.keys(), 2):#[(return_emb,return_hidden),(return_emb,return_attn),(return_hidden,return_attn)]
             if return_kwargs[kw1] and return_kwargs[kw2]:
-                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True") #return_kwargs내 comb 쌍이 둘 다 True일 수 없음. 
 
         for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
             if pass_kwargs[kw1] and pass_kwargs[kw2]:
-                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True") #pass_kwargs내 comb 쌍이 둘 다 True일 수 없음. 
+        """
+        *parabel tree는 반영하지 않음 
 
-        if not pass_emb and not pass_hidden and not pass_attn:
+                input
+                | (pass all False?)
+                |               |(pass_emb)     |(else)
+        emb_out:embed          input          None
+                |--------------|---------------|------------> (return_emb?)
+                |______________|      _________|_________   
+                    |                |(pass_emb)        |(else)
+        rnn_out: lstm(emb_out)      input             None
+                    |---------------|-------------------|------------> (return_hidden?)
+                    |______________|           _________|_________   
+                        |                     |(pass_emb)        |(else)
+        attn_out:     attn(rnn_out)          input              None 
+                        |--------------------|------------------|------------> (return_hidden?)
+                        |_______________________________________|  
+                                        | 
+        fianl_out:                linear(attn_out)
+
+        inputs : 20 500
+        emb_out : 20 500 300
+        rnn_out : 20 500 512
+        attn_out : 20 3801 512 
+        final_out : 20 3801
+        """
+        ###################################################################################
+        if not pass_emb and not pass_hidden and not pass_attn: #pass가 모두 False인 경우 
             emb_out, lengths, masks = self.emb(inputs, **kwargs)
-        elif pass_emb:
+        elif pass_emb: #pass_emb가 True인 경우 
             emb_out, lengths, masks = inputs
-        else:
+        else: #그 외 
             emb_out, lengths, masks = None, None, None
 
         if return_emb:
-            return emb_out, lengths, masks
-
+            return emb_out, lengths, masks #앞에서 초기화한 것 그대로 내보내기 
+        ###################################################################################
+        #return_emb가 False인 경우 emb_out, lengths, masks에 대해서...
         if emb_out is not None:
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
             # emb_out = self.batch_m(emb_out)
@@ -147,7 +175,7 @@ class AttentionRNN(Network):
 
         if return_hidden:
             return rnn_out, lengths, masks
-
+        ###################################################################################
         if rnn_out is not None:
             attn_out = self.attention(rnn_out, masks)  # N, labels_num, hidden_size * 2
         elif pass_attn:
@@ -157,7 +185,7 @@ class AttentionRNN(Network):
 
         if return_attn:
             return (attn_out,)
-
+        ###################################################################################
         # attn_out = self.batch_m2(attn_out)
 
         return self.linear(attn_out)
