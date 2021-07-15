@@ -97,10 +97,14 @@ def get_model(
         model = MODEL_CLS[model_name](mp_enabled=mp_enabled, **model_cnf["model"]).to(
             device
         )
-        sbert_pretrained = SentenceTransformer("stsb-roberta-base-v2")
-        model.model[0].load_state_dict(
-            list(sbert_pretrained.modules())[0][0].state_dict()
-        )
+
+        if "pretrained" in model_cnf and model_cnf["pretrained"]["model_name"]:
+            sbert_pretrained = SentenceTransformer(
+                model_cnf["pretrained"]["model_name"]
+            )
+            model.model[0].load_state_dict(
+                list(sbert_pretrained.modules())[0][0].state_dict()
+            )
     else:
         model = MODEL_CLS[model_name](
             mp_enabled=mp_enabled, **model_cnf["model"], **data_cnf["model"]

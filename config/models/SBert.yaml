@@ -3,3 +3,8 @@ name: SBert
 model:
   model_name: roberta-base
   max_seq_length: 150
+  # max_seq_length: 386
+  # pooling_mode: att
+
+pretrained:
+  model_name: stsb-roberta-base-v2
