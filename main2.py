@@ -793,18 +793,24 @@ def main(
 
     train_losses = deque(maxlen=print_step)
 
-    if resume and os.path.exists(last_ckpt_path):
-        logger.info("Resume Training")
-        start_epoch, ckpt = load_checkpoint(
-            last_ckpt_path,
-            model,
-            label_encoder,
-            optimizer,
-            scaler,
-            scheduler,
-            True,
-            True,
+    if resume and mode == "train":
+        resume_ckpt_path = (
+            last_ckpt_path if os.path.exists(last_ckpt_path) else ckpt_path
         )
+        if os.path.exists(resume_ckpt_path):
+            logger.info("Resume Training")
+            start_epoch, ckpt = load_checkpoint(
+                resume_ckpt_path,
+                model,
+                label_encoder,
+                optimizer,
+                scaler,
+                scheduler,
+                set_rng_state=True,
+                return_other_states=True,
+            )
+        else:
+            logger.warning("No checkpoint")
 
         start_epoch += 1
         global_step = ckpt["global_step"]
