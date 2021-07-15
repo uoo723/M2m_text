@@ -822,16 +822,17 @@ def main(
                 set_rng_state=True,
                 return_other_states=True,
             )
+
+            start_epoch += 1
+            global_step = ckpt["global_step"]
+            gradient_norm_queue = ckpt["gradient_norm_queue"]
+            model_swa_state = ckpt["model_swa_state"]
+            le_swa_state = ckpt["le_swa_state"]
+            best = ckpt["best"]
+            e = ckpt["e"]
+
         else:
             logger.warning("No checkpoint")
-
-        start_epoch += 1
-        global_step = ckpt["global_step"]
-        gradient_norm_queue = ckpt["gradient_norm_queue"]
-        model_swa_state = ckpt["model_swa_state"]
-        le_swa_state = ckpt["le_swa_state"]
-        best = ckpt["best"]
-        e = ckpt["e"]
 
     label_embeddings = get_label_embeddings(label_encoder, device=device)
     ann_index = build_ann(
