@@ -20,7 +20,6 @@ import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
-from sentence_transformers import SentenceTransformer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer, normalize
 from torch.cuda.amp import GradScaler
@@ -386,6 +385,13 @@ def get_results(
     return results
 
 
+def copy_file(src: str, dst: str) -> None:
+    try:
+        shutil.copyfile(src, dst)
+    except shutil.SameFileError:
+        pass
+
+
 def get_optimizer(
     model: nn.Module,
     label_encoder: nn.Module,
@@ -618,20 +624,20 @@ def main(
             os.remove(logfile_path)
         set_logger(os.path.join(ckpt_root_path, log_filename))
 
-        shutil.copyfile(
+        copy_file(
             model_cnf_path,
             os.path.join(ckpt_root_path, os.path.basename(model_cnf_path)),
         )
-        shutil.copyfile(
+        copy_file(
             le_model_cnf_path,
             os.path.join(ckpt_root_path, os.path.basename(le_model_cnf_path)),
         )
-        shutil.copyfile(
+        copy_file(
             data_cnf_path, os.path.join(ckpt_root_path, os.path.basename(data_cnf_path))
         )
 
         if run_script is not None:
-            shutil.copyfile(
+            copy_file(
                 run_script, os.path.join(ckpt_root_path, os.path.basename(run_script))
             )
 
