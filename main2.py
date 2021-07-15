@@ -4,6 +4,7 @@ Created on 2021/07/06
 """
 import os
 import random
+import shutil
 import time
 import warnings
 from collections import deque
@@ -24,19 +25,21 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer, normalize
 from torch.cuda.amp import GradScaler
 from torch.optim import Optimizer
+from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 
 from m2m_text.anns import HNSW
 from m2m_text.datasets import EURLex4K, Wiki10_31K
+from m2m_text.datasets.custom import IDDataset
 from m2m_text.datasets.sbert import SBertDataset, collate_fn
 from m2m_text.loss import CircleLoss, CircleLossv2
 from m2m_text.metrics import get_inv_propensity, get_precision_results
-from m2m_text.networks import LabelEncoder, SBert
+from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import get_mlb
 from m2m_text.utils.model import load_checkpoint, save_checkpoint
-from m2m_text.utils.train import swa_init, swa_step, swap_swa_params
+from m2m_text.utils.train import clip_gradient, swa_init, swa_step, swap_swa_params
 
 DATASET_CLS = {
     "EURLex4K": EURLex4K,
@@ -44,12 +47,15 @@ DATASET_CLS = {
 }
 
 MODEL_CLS = {
+    "AttentionRNNEncoder": AttentionRNNEncoder,
     "SBert": SBert,
 }
 
 LE_MODEL_CLS = {
     "LabelEncoder": LabelEncoder,
 }
+
+TRANSFORMER_MODELS = ["SBert"]
 
 
 def log_elapsed_time(func):
@@ -78,6 +84,29 @@ def set_seed(seed: int):
     random.seed(seed)
 
     torch.backends.cudnn.deterministic = True
+
+
+def get_model(
+    model_name: str,
+    model_cnf: dict,
+    data_cnf: dict,
+    mp_enabled: bool,
+    device: torch.device,
+) -> nn.Module:
+    if model_name in TRANSFORMER_MODELS:
+        model = MODEL_CLS[model_name](mp_enabled=mp_enabled, **model_cnf["model"]).to(
+            device
+        )
+        sbert_pretrained = SentenceTransformer("stsb-roberta-base-v2")
+        model.model[0].load_state_dict(
+            list(sbert_pretrained.modules())[0][0].state_dict()
+        )
+    else:
+        model = MODEL_CLS[model_name](
+            mp_enabled=mp_enabled, **model_cnf["model"], **data_cnf["model"]
+        ).to(device)
+
+    return model
 
 
 def sample_pos_neg(
@@ -218,14 +247,18 @@ def build_ann(
 
 
 def to_device(
-    inputs: Dict[str, torch.Tensor], device: torch.device = torch.device("cpu")
-) -> Dict[str, torch.Tensor]:
-    return {k: v.to(device) for k, v in inputs.items()}
+    inputs: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    device: torch.device = torch.device("cpu"),
+) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+    return (
+        {k: v.to(device) for k, v in inputs.items()}
+        if type(inputs) == dict
+        else inputs.to(device)
+    )
 
 
 def make_batch(
     model: SBert,
-    batch_doc_ids: np.ndarray,
     batch_x: Dict[str, torch.Tensor],
     batch_y: torch.Tensor,
     ann_index: HNSW,
@@ -239,12 +272,16 @@ def make_batch(
     device: torch.device = torch.device("cpu"),
 ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
     def _make_inputs():
-        anchor_inputs = {k: v[anchor[:batch_size]] for k, v in batch_x.items()}
+        anchor_inputs = (
+            {k: v[anchor[:batch_size]] for k, v in batch_x.items()}
+            if type(batch_x) == dict
+            else batch_x[anchor[:batch_size]]
+        )
         positive_labels = torch.from_numpy(positive[:batch_size])
         negative_labels = torch.from_numpy(negative[:batch_size])
         return anchor_inputs, positive_labels, negative_labels
 
-    batch_size = batch_doc_ids.shape[0]
+    batch_size = batch_y.shape[0]
 
     model.eval()
     with torch.no_grad():
@@ -325,12 +362,12 @@ def train_step(
             if mp_enabled:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optim)
-                # clip_gradient(model, gradient_norm_queue, gradient_clip_value, verbose=True)
+                clip_gradient(model, gradient_norm_queue, gradient_clip_value)
                 scaler.step(optim)
                 scaler.update()
             else:
                 loss.backward()
-                # clip_gradient(model, gradient_norm_queue, gradient_clip_value, verbose=True)
+                clip_gradient(model, gradient_norm_queue, gradient_clip_value)
                 optim.step()
 
     return loss.item()
@@ -412,7 +449,9 @@ def get_optimizer(
     help="train: train and eval are executed. eval: eval only",
 )
 @click.option("--test-run", is_flag=True, default=False, help="Test run mode for debug")
-@click.option("--log-dir", type=click.Path(), default="./logs", help="Log dir")
+@click.option(
+    "--run-script", type=click.Path(exists=True), help="Run script file path to log"
+)
 @click.option("--seed", type=click.INT, default=0, help="Seed for reproducibility")
 @click.option(
     "--model-cnf", type=click.Path(exists=True), help="Model config file path"
@@ -499,11 +538,26 @@ def get_optimizer(
     default="circle",
     help="Loss function",
 )
+@click.option(
+    "--weight-pos-sampling",
+    is_flag=True,
+    default=False,
+    help="Enable weighted postive sampling",
+)
+@click.option(
+    "--gradient-max-norm",
+    type=click.FLOAT,
+    help="max norm for gradient clipping",
+)
+@click.option("--m", type=click.FLOAT, default=0.15, help="Margin of Circle loss")
+@click.option(
+    "--gamma", type=click.FLOAT, default=1.0, help="Scale factor of Circle loss"
+)
 @log_elapsed_time
 def main(
     mode: str,
     test_run: bool,
-    log_dir: str,
+    run_script: str,
     seed: int,
     model_cnf: str,
     le_model_cnf: str,
@@ -532,6 +586,10 @@ def main(
     neg_num_samples: int,
     hard_neg_num_samples: int,
     loss_name: str,
+    weight_pos_sampling: bool,
+    gradient_max_norm: float,
+    m: float,
+    gamma: float,
 ):
 
     yaml = YAML(typ="safe")
@@ -544,25 +602,29 @@ def main(
     le_model_cnf = yaml.load(Path(le_model_cnf))
     data_cnf = yaml.load(Path(data_cnf))
 
-    os.makedirs(ckpt_root_path, exist_ok=True)
-
     model_name = model_cnf["name"]
     le_model_name = le_model_cnf["name"]
     dataset_name = data_cnf["name"]
 
     prefix = "" if ckpt_name is None else f"{ckpt_name}_"
     ckpt_name = f"{prefix}{model_name}_{dataset_name}_{seed}.pt"
+    ckpt_root_path = os.path.join(ckpt_root_path, os.path.splitext(ckpt_name)[0])
     ckpt_path = os.path.join(ckpt_root_path, ckpt_name)
     last_ckpt_path = os.path.splitext(ckpt_path)
     last_ckpt_path = last_ckpt_path[0] + ".last" + last_ckpt_path[1]
-
     log_filename = os.path.splitext(ckpt_name)[0] + ".log"
 
+    os.makedirs(ckpt_root_path, exist_ok=True)
+
     if not test_run:
-        logfile_path = os.path.join(log_dir, log_filename)
-        if os.path.exists(logfile_path) and not resume:
+        logfile_path = os.path.join(ckpt_root_path, log_filename)
+        if os.path.exists(logfile_path) and not resume and mode == "train":
             os.remove(logfile_path)
-        set_logger(os.path.join(log_dir, log_filename))
+        set_logger(os.path.join(ckpt_root_path, log_filename))
+        if run_script is not None:
+            shutil.copyfile(
+                run_script, os.path.join(ckpt_root_path, os.path.basename(run_script))
+            )
 
     if seed is not None:
         logger.info(f"seed: {seed}")
@@ -596,7 +658,7 @@ def main(
     )["texts"]
 
     train_ids = np.arange(len(train_dataset))
-    train_ids, _ = train_test_split(
+    train_ids, valid_ids = train_test_split(
         train_ids, test_size=data_cnf.get("valid_size", 200)
     )
     train_mask = np.zeros(len(train_dataset), dtype=np.bool)
@@ -617,12 +679,7 @@ def main(
     logger.info(f"Model: {model_name}")
     logger.info(f"Label Model: {le_model_name}")
 
-    model = MODEL_CLS[model_name](mp_enabled=mp_enabled, **model_cnf["model"]).to(
-        device
-    )
-
-    sbert_pretrained = SentenceTransformer("stsb-roberta-base-v2")
-    model.model[0].load_state_dict(list(sbert_pretrained.modules())[0][0].state_dict())
+    model = get_model(model_name, model_cnf, data_cnf, mp_enabled, device)
 
     label_encoder = LE_MODEL_CLS[le_model_name](
         num_labels=num_labels, mp_enabled=mp_enabled, **le_model_cnf["model"]
@@ -641,45 +698,70 @@ def main(
     ############################### Prepare Dataloader ###############################
     logger.info(f"Preparing dataloader for {model_name}")
 
-    tokenizer = (
-        model.module.tokenize if isinstance(model, nn.DataParallel) else model.tokenize
-    )
+    if model_name in TRANSFORMER_MODELS:
+        tokenizer = (
+            model.module.tokenize
+            if isinstance(model, nn.DataParallel)
+            else model.tokenize
+        )
 
-    train_sbert_dataset = SBertDataset(
-        tokenizer(train_tokenized_texts[train_mask]),
-        train_dataset.y[train_mask],
-    )
-    valid_sbert_dataset = SBertDataset(
-        tokenizer(train_tokenized_texts[~train_mask]),
-        train_dataset.y[~train_mask],
-    )
-    test_sbert_dataset = SBertDataset(
-        tokenizer(test_tokenized_texts),
-        test_dataset.y,
-    )
+        train_sbert_dataset = SBertDataset(
+            tokenizer(train_tokenized_texts[train_mask]),
+            train_dataset.y[train_mask],
+        )
+        valid_sbert_dataset = SBertDataset(
+            tokenizer(train_tokenized_texts[~train_mask]),
+            train_dataset.y[~train_mask],
+        )
+        test_sbert_dataset = SBertDataset(
+            tokenizer(test_tokenized_texts),
+            test_dataset.y,
+        )
 
-    train_dataloader = DataLoader(
-        train_sbert_dataset,
-        batch_size=train_batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=False if no_cuda else True,
-    )
-    valid_dataloader = DataLoader(
-        valid_sbert_dataset,
-        batch_size=test_batch_size,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=False if no_cuda else True,
-    )
-    test_dataloader = DataLoader(
-        test_sbert_dataset,
-        batch_size=test_batch_size,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=False if no_cuda else True,
-    )
+        train_dataloader = DataLoader(
+            train_sbert_dataset,
+            batch_size=train_batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        valid_dataloader = DataLoader(
+            valid_sbert_dataset,
+            batch_size=test_batch_size,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        test_dataloader = DataLoader(
+            test_sbert_dataset,
+            batch_size=test_batch_size,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+    else:
+        id_dataset = IDDataset(train_dataset)
+
+        train_dataloader = DataLoader(
+            Subset(id_dataset, train_ids),
+            batch_size=train_batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        valid_dataloader = DataLoader(
+            Subset(id_dataset, valid_ids),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        test_dataloader = DataLoader(
+            IDDataset(test_dataset),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
     ##################################################################################
 
     ############################### Prepare Training #################################
@@ -687,13 +769,16 @@ def main(
     scheduler = None
     scaler = GradScaler() if mp_enabled else None
     criterion = (
-        CircleLoss(m=0.15, gamma=1.0)
+        CircleLoss(m=m, gamma=gamma)
         if loss_name == "circle"
-        else CircleLossv2(m=0.15, gamma=1.0)
+        else CircleLossv2(m=m, gamma=gamma)
     )
-    gradient_clip_value = 5.0
-    gradient_norm_queue = deque([np.inf], maxlen=5)
-    sbert_swa_state = {}
+
+    gradient_norm_queue = (
+        deque([np.inf], maxlen=5) if gradient_max_norm is not None else None
+    )
+
+    model_swa_state = {}
     le_swa_state = {}
     results = {}
 
@@ -724,7 +809,7 @@ def main(
         start_epoch += 1
         global_step = ckpt["global_step"]
         gradient_norm_queue = ckpt["gradient_norm_queue"]
-        sbert_swa_state = ckpt["sbert_swa_state"]
+        model_swa_state = ckpt["model_swa_state"]
         le_swa_state = ckpt["le_swa_state"]
         best = ckpt["best"]
         e = ckpt["e"]
@@ -742,15 +827,12 @@ def main(
                 if early_stop:
                     break
 
-                for i, (batch_doc_ids, batch_x, batch_y) in enumerate(
-                    train_dataloader, 1
-                ):
+                for i, (_, batch_x, batch_y) in enumerate(train_dataloader, 1):
                     if early_stop:
                         break
 
                     for anchor, positive, negative in make_batch(
                         model,
-                        batch_doc_ids,
                         batch_x,
                         batch_y,
                         ann_index,
@@ -759,7 +841,7 @@ def main(
                         neg_num_samples,
                         hard_neg_num_samples,
                         #                 inv_w,
-                        weight_pos_sampling=True,
+                        weight_pos_sampling=weight_pos_sampling,
                         is_n_pairs=loss_name == "circle2",
                         device=device,
                     ):
@@ -767,14 +849,12 @@ def main(
                             model,
                             label_encoder,
                             to_device(anchor, device),
-                            positive.to(device),
-                            negative.to(device),
-                            #                     to_device(positive, device),
-                            #                     to_device(negative, device),
+                            to_device(positive, device),
+                            to_device(negative, device),
                             criterion,
                             scaler,
                             optimizer,
-                            gradient_clip_value=gradient_clip_value,
+                            gradient_clip_value=gradient_max_norm,
                             gradient_norm_queue=gradient_norm_queue,
                         )
 
@@ -787,7 +867,7 @@ def main(
 
                         if global_step == swa_warmup:
                             logger.info("Initialze SWA")
-                            swa_init(model, sbert_swa_state)
+                            swa_init(model, model_swa_state)
                             swa_init(label_encoder, le_swa_state)
 
                         val_log_msg = ""
@@ -826,7 +906,7 @@ def main(
                                     other_states={
                                         "best": best,
                                         "train_mask": train_mask,
-                                        "sbert_swa_state": sbert_swa_state,
+                                        "model_swa_state": model_swa_state,
                                         "le_swa_state": le_swa_state,
                                         "global_step": global_step,
                                         "early_criterion": early_criterion,
@@ -837,9 +917,9 @@ def main(
                             else:
                                 e += 1
 
-                            swa_step(model, sbert_swa_state)
+                            swa_step(model, model_swa_state)
                             swa_step(label_encoder, le_swa_state)
-                            swap_swa_params(model, sbert_swa_state)
+                            swap_swa_params(model, model_swa_state)
                             swap_swa_params(label_encoder, le_swa_state)
 
                             ann_index = build_ann(
@@ -879,7 +959,7 @@ def main(
             other_states={
                 "best": best,
                 "train_mask": train_mask,
-                "sbert_swa_state": sbert_swa_state,
+                "model_swa_state": model_swa_state,
                 "le_swa_state": le_swa_state,
                 "global_step": global_step,
                 "early_criterion": early_criterion,
@@ -890,6 +970,7 @@ def main(
     ##################################################################################
 
     ################################### Evaluation ###################################
+    logger.info("Evaluation.")
     load_checkpoint(ckpt_path, model, label_encoder, set_rng_state=False)
 
     test_embeddings = get_embeddings(model, test_dataloader, device)
@@ -898,7 +979,7 @@ def main(
         label_embeddings, n_candidates=ann_candidates, efS=ann_candidates
     )
 
-    test_sim, test_neigh = ann_index.kneighbors(test_embeddings)
+    _, test_neigh = ann_index.kneighbors(test_embeddings)
 
     results = get_precision_results(test_neigh, test_dataset.raw_y, inv_w, mlb=mlb)
 
@@ -909,6 +990,7 @@ def main(
         f"\npsn@1,3,5: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}"
         f"\nr@1,5,10: {results['r1']:.4f}, {results['r5']:.4f}, {results['r10']:.4f}"
     )
+    logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
     ##################################################################################
 
 

@@ -20,13 +20,12 @@ MODEL=SBert
 LE_MODEL=LabelEncoder
 
 # CKPT_ROOT_PATH="--ckpt-root-path /results/checkpoint"
-# LOG_DIR="--log-dir /results/logs"
 
 args=(
     --model-cnf config/models/$MODEL.yaml
     --le-model-cnf config/models/$LE_MODEL.yaml
     --data-cnf config/datasets/$DATASET.yaml
-    # --run-script $0
+    --run-script $0
     # --test-run
     $LOG_DIR
     $CKPT_ROOT_PATH

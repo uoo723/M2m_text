@@ -171,24 +171,32 @@ class AttentionRNNEncoder(Network):
         hidden_size: int,
         num_layers: int,
         dropout: float,
+        mp_enabled: bool = False,
         *args,
         **kwargs,
     ):
         super().__init__(emb_size, *args, **kwargs)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.attn = MLAttention(1, hidden_size * 2)
+
+        self.mp_enabled = mp_enabled
 
     def forward(
         self,
         inputs,
+        mp_enabled: Optional[bool] = None,
         *args,
         **kwargs,
     ):
-        emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
-        emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
 
-        rnn_out = self.lstm(emb_out, lengths)  # N, L, hidden_size * 2
-        index = (torch.arange(emb_out.shape[0]), lengths - 1)
-        return rnn_out[index]
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
+            emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+            outputs = self.attn(self.lstm(emb_out, lengths), masks).squeeze()
+
+        return (outputs,)
 
 
 class FCNet(nn.Module):

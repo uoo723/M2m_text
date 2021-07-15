@@ -2,7 +2,7 @@
 Created on 2021/07/12
 @author Sangwoo Han
 """
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -32,8 +32,8 @@ class SBertDataset(Dataset):
     def __getitem__(
         self, idx: int
     ) -> Union[
-        Tuple[int, Dict[str, torch.Tensor], torch.Tensor],
-        Tuple[int, Dict[str, torch.Tensor]],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
     ]:
         if self.is_train:
             return (

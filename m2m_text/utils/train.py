@@ -68,21 +68,34 @@ def clip_gradient(
 
 def swa_init(model, swa_state):
     logger.info("SWA Initializing")
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+
     swa_state["models_num"] = 1
     for n, p in model.named_parameters():
         swa_state[n] = p.data.clone().detach()
 
 
 def swa_step(model, swa_state):
-    if swa_state:
-        swa_state["models_num"] += 1
-        beta = 1.0 / swa_state["models_num"]
-        with torch.no_grad():
-            for n, p in model.named_parameters():
-                swa_state[n].mul_(1.0 - beta).add_(p.data, alpha=beta)
+    if not swa_state:
+        return
+
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+
+    swa_state["models_num"] += 1
+    beta = 1.0 / swa_state["models_num"]
+    with torch.no_grad():
+        for n, p in model.named_parameters():
+            swa_state[n].mul_(1.0 - beta).add_(p.data, alpha=beta)
 
 
 def swap_swa_params(model, swa_state):
-    if swa_state:
-        for n, p in model.named_parameters():
-            p.data, swa_state[n] = swa_state[n], p.data
+    if not swa_state:
+        return
+
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+
+    for n, p in model.named_parameters():
+        p.data, swa_state[n] = swa_state[n], p.data
