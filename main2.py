@@ -621,6 +621,19 @@ def main(
         if os.path.exists(logfile_path) and not resume and mode == "train":
             os.remove(logfile_path)
         set_logger(os.path.join(ckpt_root_path, log_filename))
+
+        shutil.copyfile(
+            model_cnf_path,
+            os.path.join(ckpt_root_path, os.path.basename(model_cnf_path)),
+        )
+        shutil.copyfile(
+            le_model_cnf_path,
+            os.path.join(ckpt_root_path, os.path.basename(le_model_cnf_path)),
+        )
+        shutil.copyfile(
+            data_cnf_path, os.path.join(ckpt_root_path, os.path.basename(data_cnf_path))
+        )
+
         if run_script is not None:
             shutil.copyfile(
                 run_script, os.path.join(ckpt_root_path, os.path.basename(run_script))
