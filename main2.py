@@ -5,6 +5,7 @@ Created on 2021/07/06
 import os
 import random
 import shutil
+import sys
 import time
 import warnings
 from collections import deque
@@ -32,7 +33,7 @@ from m2m_text.anns import HNSW
 from m2m_text.datasets import EURLex4K, Wiki10_31K
 from m2m_text.datasets.custom import IDDataset
 from m2m_text.datasets.sbert import SBertDataset, collate_fn
-from m2m_text.loss import CircleLoss, CircleLossv2
+from m2m_text.loss import CircleLoss, CircleLoss2, CircleLoss3
 from m2m_text.metrics import get_inv_propensity, get_precision_results
 from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
@@ -536,7 +537,7 @@ def get_optimizer(
 )
 @click.option(
     "--loss-name",
-    type=click.Choice(["circle", "circle2"]),
+    type=click.Choice(["circle", "circle2", "circle3"]),
     default="circle",
     help="Loss function",
 )
@@ -617,6 +618,22 @@ def main(
     log_filename = os.path.splitext(ckpt_name)[0] + ".log"
 
     os.makedirs(ckpt_root_path, exist_ok=True)
+
+    if not resume and os.path.exists(ckpt_path) and mode == "train":
+        while True:
+            print(
+                "Checkpoint is already existed. Overwrite it? [y/n]: ",
+                file=sys.stderr,
+                end="",
+            )
+            ans = input()
+            if ans.lower() == "y":
+                break
+            elif ans.lower() == "n":
+                logger.info("Stop training.")
+                return
+            else:
+                print("Wrong answer", file=sys.stderr)
 
     if not test_run:
         logfile_path = os.path.join(ckpt_root_path, log_filename)
@@ -783,11 +800,13 @@ def main(
     optimizer = get_optimizer(model, label_encoder, lr, decay, le_lr, le_decay)
     scheduler = None
     scaler = GradScaler() if mp_enabled else None
-    criterion = (
-        CircleLoss(m=m, gamma=gamma)
-        if loss_name == "circle"
-        else CircleLossv2(m=m, gamma=gamma)
-    )
+
+    if loss_name == "circle":
+        criterion = CircleLoss(m=m, gamma=gamma)
+    elif loss_name == "circle2":
+        criterion = CircleLoss2(m=m, gamma=gamma)
+    else:
+        criterion = CircleLoss3(m=m, gamma=gamma)
 
     gradient_norm_queue = (
         deque([np.inf], maxlen=5) if gradient_max_norm is not None else None
@@ -842,6 +861,8 @@ def main(
     )
     ##################################################################################
 
+    logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
+
     ##################################### Training ###################################
     if mode == "train":
         try:
@@ -864,7 +885,7 @@ def main(
                         hard_neg_num_samples,
                         #                 inv_w,
                         weight_pos_sampling=weight_pos_sampling,
-                        is_n_pairs=loss_name == "circle2",
+                        is_n_pairs=loss_name != "circle",
                         device=device,
                     ):
                         train_loss = train_step(
