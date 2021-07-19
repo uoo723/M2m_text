@@ -150,6 +150,23 @@ class MLAttention(nn.Module):
         return attention @ inputs  # N, labels_num, hidden_size
 
 
+class MultiHeadAttention(nn.Module):
+    def __init__(self, hidden_size: int, output_size: int, num_heads: int = 3) -> None:
+        super().__init__()
+        self.attention = nn.Linear(hidden_size, num_heads, bias=False)
+        self.linear = nn.Linear(hidden_size * num_heads, output_size)
+        nn.init.xavier_uniform_(self.attention.weight)
+
+    def forward(self, inputs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        masks = masks.unsqueeze(dim=1)
+        attention = (
+            self.attention(inputs).transpose(1, 2).masked_fill(~masks, -np.inf)
+        )  # N, num_heads, seq_length
+        attention = F.softmax(attention, -1)
+        outputs = attention @ inputs  # N, num_heads, hidden_size
+        return self.linear(outputs.view(outputs.size(0), -1))
+
+
 class MLAttention2(nn.Module):
     def __init__(self, num_labels: int, hidden_size: int, sparse: bool = True):
         super().__init__()

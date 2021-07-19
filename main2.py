@@ -2,15 +2,17 @@
 Created on 2021/07/06
 @author Sangwoo Han
 """
+import inspect
+import multiprocessing
 import os
 import random
 import shutil
-import sys
 import time
 import warnings
 from collections import deque
 from datetime import timedelta
 from functools import wraps
+from multiprocessing import Process
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -30,11 +32,18 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 
 from m2m_text.anns import HNSW
-from m2m_text.datasets import EURLex4K, Wiki10_31K
+from m2m_text.datasets import AmazonCat13K, EURLex4K, Wiki10_31K
 from m2m_text.datasets.custom import IDDataset
 from m2m_text.datasets.sbert import SBertDataset, collate_fn
 from m2m_text.loss import CircleLoss, CircleLoss2, CircleLoss3
-from m2m_text.metrics import get_inv_propensity, get_precision_results
+from m2m_text.metrics import (
+    get_inv_propensity,
+    get_n_5,
+    get_p_5,
+    get_precision_results,
+    get_psp_5,
+    get_r_10,
+)
 from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import get_mlb
@@ -42,6 +51,7 @@ from m2m_text.utils.model import load_checkpoint, save_checkpoint
 from m2m_text.utils.train import clip_gradient, swa_init, swa_step, swap_swa_params
 
 DATASET_CLS = {
+    "AmazonCat13K": AmazonCat13K,
     "EURLex4K": EURLex4K,
     "Wiki10_31K": Wiki10_31K,
 }
@@ -113,10 +123,17 @@ def sample_pos_neg(
     batch_y: torch.Tensor,
     ann: HNSW,
     ann_candidates: int = 100,
+    hard_neg_candidates: List[int] = [5, 10, 15],
     search_by_id: bool = True,
     inv_w: Optional[np.ndarray] = None,
     weight_pos_sampling: bool = False,
+    is_n_pairs: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    for candidates in hard_neg_candidates:
+        assert (
+            ann_candidates >= candidates
+        ), "ann_candidates must be greater than or equal to negative_candidates"
+
     positives = []
     negatives = []
 
@@ -142,31 +159,40 @@ def sample_pos_neg(
         )
 
         hard_neg = []
-        shuffle_idx = np.arange(ann_candidates)
-        np.random.shuffle(shuffle_idx)
-        for neigh_label_id in neigh_indices[i][:ann_candidates][shuffle_idx]:
+        for candidates in hard_neg_candidates + [ann_candidates]:
             if len(hard_neg) >= hard_neg_num_samples:
                 break
 
-            if neigh_label_id != -1 and neigh_label_id not in pos:
-                hard_neg.append(neigh_label_id)
+            shuffle_idx = np.arange(candidates)
+            np.random.shuffle(shuffle_idx)
+            for neigh_label_id in neigh_indices[i][:candidates][shuffle_idx]:
+                if len(hard_neg) >= hard_neg_num_samples:
+                    break
 
-        assert (
-            len(hard_neg) == hard_neg_num_samples
-        ), "Hint: Increase ann_candidates or check if HNSW returns a lot of -1"
+                if (
+                    neigh_label_id != -1
+                    and neigh_label_id not in pos
+                    and neigh_label_id not in hard_neg
+                ):
+                    hard_neg.append(neigh_label_id)
+
+        # if not is_n_pairs:
+        #     assert (
+        #         len(hard_neg) == hard_neg_num_samples
+        #     ), "Hint: Increase ann_candidates or check if HNSW returns a lot of -1"
 
         random_label_id = np.arange(batch_y.shape[1])
         np.random.shuffle(random_label_id)
 
         neg = []
         for label_id in random_label_id:
-            if len(neg) >= neg_num_samples:
+            if len(neg) + len(hard_neg) >= neg_num_samples + hard_neg_num_samples:
                 break
 
             if label_id not in pos and label_id not in hard_neg:
                 neg.append(label_id)
 
-        assert len(neg) == neg_num_samples
+        assert len(neg) + len(hard_neg) == neg_num_samples + hard_neg_num_samples
 
         negatives.append(
             np.concatenate(
@@ -228,18 +254,67 @@ def get_label_embeddings(
 
 
 def build_ann(
-    embedding: np.ndarray,
+    embeddings: Optional[np.ndarray] = None,
     M: int = 100,
     efC: int = 300,
     efS: int = 500,
     n_candidates: int = 500,
-    metric="cosine",
-    n_jobs=-1,
+    metric: str = "cosine",
+    n_jobs: int = -1,
+    filepath: Optional[str] = None,
 ) -> HNSW:
     index = HNSW(
         M=M, efC=efC, efS=efS, n_candidates=n_candidates, metric=metric, n_jobs=n_jobs
     )
-    return index.fit(embedding)
+
+    if embeddings is not None:
+        index.fit(embeddings)
+
+    if filepath is not None:
+        index.save_index(filepath)
+
+    return index
+
+
+def build_ann_async(
+    filepath: str,
+    embeddings: np.ndarray,
+    M: int = 100,
+    efC: int = 300,
+    efS: int = 500,
+    n_candidates: int = 500,
+    metric: str = "cosine",
+    n_jobs: int = -1,
+) -> Process:
+    p = Process(
+        target=build_ann,
+        args=(embeddings, M, efC, efS, n_candidates, metric, n_jobs, filepath),
+    )
+
+    p.start()
+
+    return p
+
+
+def load_ann(
+    index: HNSW,
+    filepath: str,
+    p: Optional[Process] = None,
+) -> bool:
+    if p is not None:
+        if p.is_alive():
+            return False
+
+        if p.exitcode != 0:
+            raise Exception(f"Building process failed. exit code: {p.exitcode}")
+
+    index.load_index(filepath)
+    return True
+
+
+def copy_ann_index(src: str, dst: str) -> None:
+    shutil.copyfile(src, dst)
+    shutil.copyfile(src + ".dat", dst + ".dat")
 
 
 def to_device(
@@ -259,6 +334,7 @@ def make_batch(
     batch_y: torch.Tensor,
     ann_index: HNSW,
     ann_candidates: int,
+    hard_neg_candidates: List[int],
     pos_max_num_samples: int,
     neg_max_num_samples: int,
     hard_neg_max_num_samples: int,
@@ -291,9 +367,11 @@ def make_batch(
         batch_y,
         ann_index,
         ann_candidates,
+        hard_neg_candidates,
         search_by_id=False,
         inv_w=inv_w,
         weight_pos_sampling=weight_pos_sampling,
+        is_n_pairs=is_n_pairs,
     )
 
     if is_n_pairs:
@@ -340,6 +418,7 @@ def train_step(
     is_train: bool = True,
     gradient_clip_value: Optional[float] = None,
     gradient_norm_queue: Optional[deque] = None,
+    inv_w: Optional[torch.Tensor] = None,
 ):
     model.train(is_train)
     label_encoder.train(is_train)
@@ -347,10 +426,19 @@ def train_step(
 
     with torch.set_grad_enabled(is_train):
         with torch.cuda.amp.autocast(enabled=mp_enabled):
+            pos_inv_w = (
+                inv_w[batch_positive].to(batch_positive.device)
+                if inv_w is not None
+                else None
+            )
             anchor_outputs = model(batch_anchor)[0]
             positive_outputs = label_encoder(batch_positive)
             negative_outputs = label_encoder(batch_negative)
-            loss = criterion(anchor_outputs, positive_outputs, negative_outputs)
+            loss = (
+                criterion(anchor_outputs, positive_outputs, negative_outputs, pos_inv_w)
+                if len(inspect.signature(criterion.forward).parameters) == 4
+                else criterion(anchor_outputs, positive_outputs, negative_outputs)
+            )
 
         if is_train:
             optim.zero_grad()
@@ -378,11 +466,32 @@ def get_results(
     inv_w: Optional[np.ndarray] = None,
     device: torch.device = torch.device("cpu"),
 ) -> Dict[str, float]:
+    if mlb is None:
+        mlb = MultiLabelBinarizer(sparse_output=True).fit(raw_y)
+
     test_embeddings = get_embeddings(model, dataloader, device, leave=False)
 
-    test_dist, test_neigh = ann_index.kneighbors(test_embeddings)
+    _, test_neigh = ann_index.kneighbors(test_embeddings)
 
-    results = get_precision_results(test_neigh, raw_y, inv_w, mlb)
+    prediction = mlb.classes_[test_neigh]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        p5 = get_p_5(prediction, raw_y, mlb)
+        n5 = get_n_5(prediction, raw_y, mlb)
+        r10 = get_r_10(prediction, raw_y, mlb)
+
+        results = {
+            "p5": p5,
+            "n5": n5,
+            "r10": r10,
+        }
+
+        if inv_w is not None:
+            psp5 = get_psp_5(prediction, raw_y, inv_w, mlb)
+            results["psp5"] = psp5
+
     return results
 
 
@@ -491,7 +600,7 @@ def get_optimizer(
 )
 @click.option(
     "--early-criterion",
-    type=click.Choice(["p1", "p3", "p5", "n1", "n3", "n5", "psp1", "psp3", "psp5"]),
+    type=click.Choice(["p5", "n5", "psp5"]),
     default="n5",
     help="Early stopping criterion",
 )
@@ -518,6 +627,13 @@ def get_optimizer(
 )
 @click.option(
     "--ann-candidates", type=click.INT, default=30, help="# of ANN candidates"
+)
+@click.option(
+    "--hard-neg-candidates",
+    multiple=True,
+    type=click.INT,
+    default=[5, 10, 15],
+    help="# of hard neg candidates",
 )
 @click.option(
     "--freeze-model", is_flag=True, default=False, help="Freeze model parameters"
@@ -556,6 +672,24 @@ def get_optimizer(
 @click.option(
     "--gamma", type=click.FLOAT, default=1.0, help="Scale factor of Circle loss"
 )
+@click.option(
+    "--loss-pos-weights",
+    is_flag=True,
+    default=False,
+    help="Enable pos weights based on inv_w",
+)
+@click.option(
+    "--normalize-loss-pos-weights",
+    is_flag=True,
+    default=False,
+    help="normalize loss pos weights",
+)
+@click.option(
+    "--loss-pos-weights-warmup",
+    type=click.INT,
+    default=10,
+    help="loss pos weights warmup",
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -583,6 +717,7 @@ def main(
     le_decay: float,
     le_lr: float,
     ann_candidates: int,
+    hard_neg_candidates: List[int],
     freeze_model: bool,
     resume: bool,
     pos_num_samples: int,
@@ -593,8 +728,10 @@ def main(
     gradient_max_norm: float,
     m: float,
     gamma: float,
+    loss_pos_weights: bool,
+    loss_pos_weights_warmup: int,
+    normalize_loss_pos_weights: bool,
 ):
-
     yaml = YAML(typ="safe")
 
     model_cnf_path = model_cnf
@@ -617,23 +754,15 @@ def main(
     last_ckpt_path = last_ckpt_path[0] + ".last" + last_ckpt_path[1]
     log_filename = os.path.splitext(ckpt_name)[0] + ".log"
 
+    ann_index_filepath = os.path.join(ckpt_root_path, "ann_index")
+    best_ann_index_filepath = os.path.join(ckpt_root_path, "best_ann_index")
+
     os.makedirs(ckpt_root_path, exist_ok=True)
 
     if not resume and os.path.exists(ckpt_path) and mode == "train":
-        while True:
-            print(
-                "Checkpoint is already existed. Overwrite it? [y/n]: ",
-                file=sys.stderr,
-                end="",
-            )
-            ans = input()
-            if ans.lower() == "y":
-                break
-            elif ans.lower() == "n":
-                logger.info("Stop training.")
-                return
-            else:
-                print("Wrong answer", file=sys.stderr)
+        click.confirm(
+            "Checkpoint is already existed. Overwrite it?", abort=True, err=True
+        )
 
     if not test_run:
         logfile_path = os.path.join(ckpt_root_path, log_filename)
@@ -677,6 +806,14 @@ def main(
             train=False, **data_cnf["dataset"], **model_cnf.get("dataset", {})
         )
         inv_w = get_inv_propensity(train_dataset.y)
+        inv_w_tensor = torch.from_numpy(inv_w)
+
+        if normalize_loss_pos_weights:
+            inv_w_tensor /= inv_w_tensor.max()
+            # inv_w_tensor = (inv_w_tensor - inv_w_tensor.min()) / (
+            #     inv_w_tensor.max() - inv_w_tensor.min()
+            # )
+
         mlb = get_mlb(train_dataset.le_path)
         num_labels = train_dataset.y.shape[1]
 
@@ -827,6 +964,8 @@ def main(
 
     train_losses = deque(maxlen=print_step)
 
+    ann_index = None
+
     if resume and mode == "train":
         resume_ckpt_path = (
             last_ckpt_path if os.path.exists(last_ckpt_path) else ckpt_path
@@ -845,6 +984,7 @@ def main(
             )
 
             start_epoch += 1
+            epoch = start_epoch
             global_step = ckpt["global_step"]
             gradient_norm_queue = ckpt["gradient_norm_queue"]
             model_swa_state = ckpt["model_swa_state"]
@@ -852,20 +992,31 @@ def main(
             best = ckpt["best"]
             e = ckpt["e"]
 
+            ann_index = build_ann(n_candidates=ann_candidates, efS=ann_candidates)
+            load_ann(ann_index, ann_index_filepath)
+
         else:
             logger.warning("No checkpoint")
 
-    label_embeddings = get_label_embeddings(label_encoder, device=device)
-    ann_index = build_ann(
-        label_embeddings, n_candidates=ann_candidates, efS=ann_candidates
-    )
+    if ann_index is None and mode == "train":
+        logger.info("Build ANN Index")
+
+        ann_index = build_ann(
+            get_label_embeddings(label_encoder, device=device),
+            n_candidates=ann_candidates,
+            efS=ann_candidates,
+            filepath=ann_index_filepath,
+        )
     ##################################################################################
 
     logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
 
     ##################################### Training ###################################
+    ann_build_process = None
+
     if mode == "train":
         try:
+            hard_neg_candidates = sorted(hard_neg_candidates)
             for epoch in range(start_epoch, num_epochs):
                 if early_stop:
                     break
@@ -880,6 +1031,7 @@ def main(
                         batch_y,
                         ann_index,
                         ann_candidates,
+                        hard_neg_candidates,
                         pos_num_samples,
                         neg_num_samples,
                         hard_neg_num_samples,
@@ -888,6 +1040,15 @@ def main(
                         is_n_pairs=loss_name != "circle",
                         device=device,
                     ):
+
+                        if (
+                            ann_build_process is not None
+                            and not ann_build_process.is_alive()
+                        ):
+                            load_ann(ann_index, ann_index_filepath, ann_build_process)
+                            logger.info("Update ANN Index")
+                            ann_build_process = None
+
                         train_loss = train_step(
                             model,
                             label_encoder,
@@ -899,6 +1060,10 @@ def main(
                             optimizer,
                             gradient_clip_value=gradient_max_norm,
                             gradient_norm_queue=gradient_norm_queue,
+                            inv_w=inv_w_tensor
+                            if loss_pos_weights
+                            and global_step >= loss_pos_weights_warmup
+                            else None,
                         )
 
                         if scheduler is not None:
@@ -957,6 +1122,9 @@ def main(
                                         "e": e,
                                     },
                                 )
+                                copy_ann_index(
+                                    ann_index_filepath, best_ann_index_filepath
+                                )
                             else:
                                 e += 1
 
@@ -965,11 +1133,14 @@ def main(
                             swap_swa_params(model, model_swa_state)
                             swap_swa_params(label_encoder, le_swa_state)
 
-                            ann_index = build_ann(
-                                get_label_embeddings(label_encoder, device=device),
-                                n_candidates=ann_candidates,
-                                efS=ann_candidates,
-                            )
+                            if ann_build_process is None:
+                                ann_build_process = build_ann_async(
+                                    ann_index_filepath,
+                                    get_label_embeddings(label_encoder, device=device),
+                                    n_candidates=ann_candidates,
+                                    efS=ann_candidates,
+                                    n_jobs=multiprocessing.cpu_count() // 2,
+                                )
 
                         if (
                             global_step % print_step == 0
@@ -1017,10 +1188,11 @@ def main(
     load_checkpoint(ckpt_path, model, label_encoder, set_rng_state=False)
 
     test_embeddings = get_embeddings(model, test_dataloader, device)
-    label_embeddings = get_label_embeddings(label_encoder, device=device)
-    ann_index = build_ann(
-        label_embeddings, n_candidates=ann_candidates, efS=ann_candidates
-    )
+
+    if ann_index is None:
+        ann_index = build_ann(n_candidates=ann_candidates, efS=ann_candidates)
+
+    load_ann(ann_index, best_ann_index_filepath)
 
     _, test_neigh = ann_index.kneighbors(test_embeddings)
 

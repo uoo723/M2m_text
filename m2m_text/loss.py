@@ -137,7 +137,11 @@ class CircleLoss3(nn.Module):
         self.gamma = gamma
 
     def forward(
-        self, anchor: torch.Tensor, pos: torch.Tensor, neg: torch.Tensor
+        self,
+        anchor: torch.Tensor,
+        pos: torch.Tensor,
+        neg: torch.Tensor,
+        pos_weights: torch.Tensor = None,
     ) -> torch.Tensor:
         anchor = F.normalize(anchor, dim=-1)
         pos = F.normalize(pos, dim=-1)
@@ -152,7 +156,9 @@ class CircleLoss3(nn.Module):
         delta_p = 1 - self.m
         delta_n = self.m
 
-        logit_p = -ap * (sp - delta_p) * self.gamma
+        pos_weights = 1.0 if pos_weights is None else pos_weights
+
+        logit_p = -ap * (sp - delta_p) * self.gamma * pos_weights
         logit_n = an * (sn - delta_n) * self.gamma
 
         loss = F.softplus(

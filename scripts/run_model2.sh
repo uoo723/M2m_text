@@ -5,17 +5,12 @@ export MLFLOW_EXPERIMENT_NAME=Cornet
 
 DATASET=EURLex-4K
 # DATASET=AmazonCat13K
-# DATASET=Wiki1-31K
+# DATASET=Wiki10-31K
 # DATASET=AmazonCat-1000
 # DATASET=Wiki10-3000
 
-MODEL=SBert
-# MODEL=CornetAttentionRNNv2
-# MODEL=LabelGCNAttentionRNN
-# MODEL=LabelGCNAttentionRNNv2
-# MODEL=LabelGCNAttentionRNNv3
-# MODEL=LabelGCNAttentionRNNv4
-# MODEL=EaseAttentionRNN
+# MODEL=SBert
+MODEL=AttentionRNNEncoder
 
 LE_MODEL=LabelEncoder
 
@@ -28,24 +23,35 @@ args=(
     --run-script $0
     # --test-run
     $LOG_DIR
-    $CKPT_ROOT_PATH
-    --num-epochs 100
-    # --lr 1e-5
-    --train-batch-size 64
-    --test-batch-size 128
-    --ckpt-name baseline
+    --num-epochs 400
+    --lr 1e-3
+    --train-batch-size 128
+    --test-batch-size 256
+    --ckpt-name normalized_loss_pos_weights
     --early-criterion 'n5'
     --seed $1
-    --swa-warmup 980
-    --eval-step 300
+    --swa-warmup 600
+    --eval-step 150
     --early 30
     --pos-num-samples 5
     --neg-num-samples 0
     --hard-neg-num-samples 5
     --mp-enabled
-    --loss-name 'circle2'
+    --loss-name 'circle3'
+    --weight-pos-sampling
+    --gradient-max-norm 5.0
+    --num-workers 0
     # --freeze-model
     # --resume
+    # --mode 'eval'
+    # --gamma 32
+    --m 0.1
+    --hard-neg-candidates 5
+    --hard-neg-candidates 10
+    --hard-neg-candidates 15
+    --loss-pos-weights
+    --loss-pos-weights-warmup -1
+    --normalize-loss-pos-weights
 )
 
 python main2.py "${args[@]}"

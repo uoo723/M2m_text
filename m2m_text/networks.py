@@ -38,6 +38,7 @@ from .modules import (
     MLAttention2,
     MLAttentionForSBert,
     MLLinear,
+    MultiHeadAttention,
     Readout,
     Residual,
 )
@@ -171,13 +172,14 @@ class AttentionRNNEncoder(Network):
         hidden_size: int,
         num_layers: int,
         dropout: float,
+        num_heads: int,
         mp_enabled: bool = False,
         *args,
         **kwargs,
     ):
         super().__init__(emb_size, *args, **kwargs)
         self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
-        self.attn = MLAttention(1, hidden_size * 2)
+        self.attn = MultiHeadAttention(hidden_size * 2, hidden_size * 2, num_heads)
 
         self.mp_enabled = mp_enabled
 
@@ -194,7 +196,7 @@ class AttentionRNNEncoder(Network):
         with torch.cuda.amp.autocast(enabled=mp_enabled):
             emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
-            outputs = self.attn(self.lstm(emb_out, lengths), masks).squeeze()
+            outputs = self.attn(self.lstm(emb_out, lengths), masks)
 
         return (outputs,)
 

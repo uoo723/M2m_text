@@ -157,6 +157,26 @@ class HNSW(ApproximateNearestNeighbor):
     def embedding(self):
         return self._embedding
 
+    def set_space(self):
+        if self.metric in [
+            "euclidean",
+            "l2",
+            "minkowski",
+            "squared_euclidean",
+            "sqeuclidean",
+        ]:
+            if self.metric in ["squared_euclidean", "sqeuclidean"]:
+                self.metric = "sqeuclidean"
+            else:
+                self.metric = "euclidean"
+            self.space = "l2"
+        elif self.metric in ["cosine", "cosinesimil"]:
+            self.space = "cosinesimil"
+        else:
+            raise ValueError(
+                f'Invalid metric "{self.metric}". Please try "euclidean" or "cosine".'
+            )
+
     def fit(self, X, y=None):
         """Setup the HNSW index from training data.
         Parameters
@@ -177,24 +197,7 @@ class HNSW(ApproximateNearestNeighbor):
         method = self.method
         post_processing = self.post_processing
 
-        if self.metric in [
-            "euclidean",
-            "l2",
-            "minkowski",
-            "squared_euclidean",
-            "sqeuclidean",
-        ]:
-            if self.metric in ["squared_euclidean", "sqeuclidean"]:
-                self.metric = "sqeuclidean"
-            else:
-                self.metric = "euclidean"
-            self.space = "l2"
-        elif self.metric in ["cosine", "cosinesimil"]:
-            self.space = "cosinesimil"
-        else:
-            raise ValueError(
-                f'Invalid metric "{self.metric}". Please try "euclidean" or "cosine".'
-            )
+        self.set_space()
 
         hnsw_index = nmslib.init(method=method, space=self.space)
         hnsw_index.addDataPointBatch(X)
@@ -282,3 +285,22 @@ class HNSW(ApproximateNearestNeighbor):
             return neigh_dist, neigh_ind
         else:
             return neigh_ind
+
+    def save_index(self, filename: str, save_data: bool = True):
+        check_is_fitted(
+            self,
+            [
+                "index_",
+            ],
+        )
+
+        self.index_.saveIndex(filename, save_data)
+
+    def load_index(self, filename: str, load_data: bool = True):
+        if not hasattr(self, 'index_'):
+            self.set_space()
+            hnsw_index = nmslib.init(method=self.method, space=self.space)
+            self.index_ = hnsw_index
+
+        self.index_.loadIndex(filename, load_data)
+        self.n_samples_fit_ = len(self.index_)
