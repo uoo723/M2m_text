@@ -151,11 +151,15 @@ class HNSW(ApproximateNearestNeighbor):
         self.method = method
         self.post_processing = post_processing
         self.space = None
-        self._embedding = None
+        self._embeddings = None
 
     @property
-    def embedding(self):
-        return self._embedding
+    def embeddings(self):
+        return self._embeddings
+
+    @embeddings.setter
+    def embeddings(self, value):
+        self._embeddings = value
 
     def set_space(self):
         if self.metric in [
@@ -192,7 +196,7 @@ class HNSW(ApproximateNearestNeighbor):
         """
         X = check_array(X)
 
-        self._embedding = X
+        self._embeddings = X
 
         method = self.method
         post_processing = self.post_processing
@@ -257,7 +261,7 @@ class HNSW(ApproximateNearestNeighbor):
         self.index_.setQueryTimeParams({"efSearch": self.efS})
 
         if search_by_id:
-            X = self.embedding[X]
+            X = self.embeddings[X]
 
         # Fetch the neighbor candidates
         neigh_ind_dist = self.index_.knnQueryBatch(
@@ -297,7 +301,7 @@ class HNSW(ApproximateNearestNeighbor):
         self.index_.saveIndex(filename, save_data)
 
     def load_index(self, filename: str, load_data: bool = True):
-        if not hasattr(self, 'index_'):
+        if not hasattr(self, "index_"):
             self.set_space()
             hnsw_index = nmslib.init(method=self.method, space=self.space)
             self.index_ = hnsw_index

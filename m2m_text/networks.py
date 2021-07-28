@@ -6,7 +6,7 @@ Created on 2020/12/31
 """
 
 from itertools import combinations
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import dgl
 import numpy as np
@@ -197,6 +197,93 @@ class AttentionRNNEncoder(Network):
             emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
             emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
             outputs = self.attn(self.lstm(emb_out, lengths), masks)
+
+        return (outputs,)
+
+
+class RNNEncoder(Network):
+    def __init__(
+        self,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        dropout: float,
+        mp_enabled: bool = False,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(emb_size, *args, **kwargs)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.mp_enabled = mp_enabled
+        self.hidden_size = hidden_size
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        mp_enabled: Optional[bool] = None,
+        *args,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            emb_out, lengths, masks = self.emb(inputs, *args, **kwargs)
+            emb_out, masks = emb_out[:, : lengths.max()], masks[:, : lengths.max()]
+            outputs = self.lstm(emb_out, lengths)
+
+        return outputs, masks
+
+
+class AttentionRNN2(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_labels: int,
+        linear_size: List[int],
+        mp_enabled: bool = False,
+    ) -> Tuple[torch.Tensor]:
+        self.attn = MLAttention(num_labels, hidden_size)
+        self.linear = MLLinear([hidden_size] + linear_size, 1)
+        self.mp_enabled = mp_enabled
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        masks: torch.Tensor,
+        mp_enabled: Optional[bool] = None,
+    ):
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            outputs = self.linear(self.attn(inputs, masks))
+
+        return (outputs,)
+
+
+class AttentionRNNEncoder2(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        mp_enabled: bool = False,
+    ):
+        super().__init__()
+        self.attn = MultiHeadAttention(hidden_size, hidden_size, num_heads)
+        self.mp_enabled = mp_enabled
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        masks: torch.Tensor,
+        mp_enabled: Optional[bool] = None,
+    ) -> Tuple[torch.Tensor]:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            outputs = self.attn(inputs, masks)
 
         return (outputs,)
 

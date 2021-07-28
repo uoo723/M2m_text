@@ -12,9 +12,11 @@ from .utils.data import get_sparse_features
 
 __all__ = ["get_clusters"]
 
+TLabelF = Union[csr_matrix, np.ndarray]
+
 
 def get_clusters(
-    labels_f: csr_matrix,
+    labels_f: TLabelF,
     levels: List[int] = [10],
     eps: float = 1e-4,
     max_leaf: int = 2,
@@ -141,7 +143,7 @@ def build_tree_by_level(
 
 def split_node(
     labels_i: np.ndarray,
-    labels_f: csr_matrix,
+    labels_f: TLabelF,
     eps: float,
     alg: str = "kmeans",
     overlap_ratio: float = 0.0,

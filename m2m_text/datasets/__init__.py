@@ -2,6 +2,7 @@
 Created on 2021/01/08
 @author Sangwoo Han
 """
+from .custom import IDDataset
 from .sbert import SBertDataset
 from .sparse import RCV1
 from .text import (
@@ -27,4 +28,5 @@ __all__ = [
     "AmazonCat13K",
     "Wiki10_31K",
     "SBertDataset",
+    "IDDataset",
 ]

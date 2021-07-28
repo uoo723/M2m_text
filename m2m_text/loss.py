@@ -131,10 +131,21 @@ class CircleLoss3(nn.Module):
         self,
         m: float = 0.15,
         gamma: float = 1.0,
+        metric: str = "cosine",
     ) -> None:
         super().__init__()
         self.m = m
         self.gamma = gamma
+        self.metric = metric
+
+        assert self.metric in ["cosine", "euclidean"]
+
+    def distance(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        if self.metric == "cosine":
+            x1 = F.normalize(x1, dim=-1)
+            x2 = F.normalize(x2, dim=-1)
+            return (x1.unsqueeze(1) @ x2.transpose(2, 1)).squeeze()
+        return 1 / (1 + torch.cdist(x1.unsqueeze(1), x2).squeeze())
 
     def forward(
         self,
@@ -143,12 +154,8 @@ class CircleLoss3(nn.Module):
         neg: torch.Tensor,
         pos_weights: torch.Tensor = None,
     ) -> torch.Tensor:
-        anchor = F.normalize(anchor, dim=-1)
-        pos = F.normalize(pos, dim=-1)
-        neg = F.normalize(neg, dim=-1)
-
-        sp = (anchor.unsqueeze(1) @ pos.transpose(2, 1)).squeeze()
-        sn = (anchor.unsqueeze(1) @ neg.transpose(2, 1)).squeeze()
+        sp = self.distance(anchor, pos)
+        sn = self.distance(anchor, neg)
 
         ap = torch.clamp_min(-sp.detach() + 1 + self.m, min=0.0)
         an = torch.clamp_min(sn.detach() + self.m, min=0.0)
@@ -156,10 +163,11 @@ class CircleLoss3(nn.Module):
         delta_p = 1 - self.m
         delta_n = self.m
 
+        neg_weights = 1.0 if pos_weights is None else pos_weights.mean()
         pos_weights = 1.0 if pos_weights is None else pos_weights
 
         logit_p = -ap * (sp - delta_p) * self.gamma * pos_weights
-        logit_n = an * (sn - delta_n) * self.gamma
+        logit_n = an * (sn - delta_n) * self.gamma * neg_weights
 
         loss = F.softplus(
             torch.logsumexp(logit_p, dim=-1) + torch.logsumexp(logit_n, dim=-1)

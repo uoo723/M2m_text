@@ -139,6 +139,10 @@ notebooks/
 
 # model checkpoint
 checkpoint/
+models/*.pt
+temp/
+EURLex/
+img/
 
 # mlflow
 mlruns/

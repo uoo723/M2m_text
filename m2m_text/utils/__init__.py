@@ -8,6 +8,7 @@ from ._base import (
     check_md5,
     download_from_url,
     extract_archive,
+    normalize,
 )
 
 
@@ -17,4 +18,5 @@ __all__ = [
     "check_md5",
     "download_from_url",
     "extract_archive",
+    "normalize",
 ]

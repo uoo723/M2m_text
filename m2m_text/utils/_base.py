@@ -7,6 +7,7 @@ import os
 from typing import Any, Optional
 
 import gdown
+import numpy as np
 
 
 def calculate_md5(fpath: str, chunk_size: int = 1024 * 1024) -> str:
@@ -108,3 +109,18 @@ def extract_archive(fpath: str) -> bool:
     gdown.extractall(fpath)
 
     return True
+
+
+def normalize(x: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Normalize vector
+
+    Args:
+        x (np.ndarray): The data to normalize.
+
+        axis (int): axis used to normalize the data along.
+
+    Returns:
+        normalized_x (np.ndarray): normalized x
+    """
+    norm = np.expand_dims(np.linalg.norm(x, axis=axis), axis=axis)
+    return x / norm

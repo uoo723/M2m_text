@@ -4,4 +4,4 @@ model:
   model_name: sentence-transformers/stsb-roberta-base-v2
   max_seq_length: 150
   # max_seq_length: 386
-  # pooling_mode: att
+  pooling_mode: att
