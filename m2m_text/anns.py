@@ -5,9 +5,10 @@ Created on 2021/05/13
 
 # Refrence: https://github.com/VarIr/scikit-hubness/tree/master/skhubness/neighbors
 
+import shutil
 from abc import ABC, abstractmethod
-from multiprocessing import cpu_count
-from typing import Tuple, Union
+from multiprocessing import Process, cpu_count
+from typing import Optional, Tuple, Union
 
 import nmslib
 import numpy as np
@@ -308,3 +309,85 @@ class HNSW(ApproximateNearestNeighbor):
 
         self.index_.loadIndex(filename, load_data)
         self.n_samples_fit_ = len(self.index_)
+
+
+def build_ann(
+    embeddings: Optional[np.ndarray] = None,
+    M: int = 100,
+    efC: int = 300,
+    efS: int = 500,
+    n_candidates: int = 500,
+    metric: str = "cosine",
+    n_jobs: int = -1,
+    filepath: Optional[str] = None,
+    embedding_filepath: Optional[str] = None,
+) -> HNSW:
+    index = HNSW(
+        M=M, efC=efC, efS=efS, n_candidates=n_candidates, metric=metric, n_jobs=n_jobs
+    )
+
+    if embeddings is not None:
+        index.fit(embeddings)
+
+    if filepath is not None:
+        assert embedding_filepath is not None
+
+        index.save_index(filepath)
+        np.save(embedding_filepath, embeddings)
+
+    return index
+
+
+def build_ann_async(
+    filepath: str,
+    embedding_filepath: str,
+    embeddings: np.ndarray,
+    M: int = 100,
+    efC: int = 300,
+    efS: int = 500,
+    n_candidates: int = 500,
+    metric: str = "cosine",
+    n_jobs: int = -1,
+) -> Process:
+    p = Process(
+        target=build_ann,
+        args=(
+            embeddings,
+            M,
+            efC,
+            efS,
+            n_candidates,
+            metric,
+            n_jobs,
+            filepath,
+            embedding_filepath,
+        ),
+    )
+
+    p.start()
+
+    return p
+
+
+def load_ann(
+    index: HNSW,
+    filepath: str,
+    embedding_filepath: str,
+    p: Optional[Process] = None,
+) -> bool:
+    if p is not None:
+        if p.is_alive():
+            return False
+
+        if p.exitcode != 0:
+            raise Exception(f"Building process failed. exit code: {p.exitcode}")
+
+    index.load_index(filepath)
+    index.embeddings = np.load(embedding_filepath)
+
+    return True
+
+
+def copy_ann_index(src: str, dst: str) -> None:
+    shutil.copyfile(src, dst)
+    shutil.copyfile(src + ".dat", dst + ".dat")

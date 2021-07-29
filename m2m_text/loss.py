@@ -2,7 +2,7 @@
 Created on 2021/01/07
 @author Sangwoo Han
 """
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -151,26 +151,26 @@ class CircleLoss3(nn.Module):
         self,
         anchor: torch.Tensor,
         pos: torch.Tensor,
-        neg: torch.Tensor,
+        neg: Optional[torch.Tensor] = None,
         pos_weights: torch.Tensor = None,
     ) -> torch.Tensor:
         sp = self.distance(anchor, pos)
-        sn = self.distance(anchor, neg)
-
         ap = torch.clamp_min(-sp.detach() + 1 + self.m, min=0.0)
-        an = torch.clamp_min(sn.detach() + self.m, min=0.0)
-
         delta_p = 1 - self.m
-        delta_n = self.m
+        weights = 1.0 if pos_weights is None else pos_weights
+        logit_p = -ap * (sp - delta_p) * self.gamma * weights
+        logit_p_logsumexp = torch.logsumexp(logit_p, dim=-1)
 
-        neg_weights = 1.0 if pos_weights is None else pos_weights.mean()
-        pos_weights = 1.0 if pos_weights is None else pos_weights
+        if neg is not None:
+            sn = self.distance(anchor, neg)
+            an = torch.clamp_min(sn.detach() + self.m, min=0.0)
+            delta_n = self.m
+            neg_weights = 1.0 if pos_weights is None else pos_weights.mean()
+            logit_n = an * (sn - delta_n) * self.gamma * neg_weights
+            logit_n_logsumexp = torch.logsumexp(logit_n, dim=-1)
+        else:
+            logit_n_logsumexp = 0
 
-        logit_p = -ap * (sp - delta_p) * self.gamma * pos_weights
-        logit_n = an * (sn - delta_n) * self.gamma * neg_weights
-
-        loss = F.softplus(
-            torch.logsumexp(logit_p, dim=-1) + torch.logsumexp(logit_n, dim=-1)
-        )
+        loss = F.softplus(logit_p_logsumexp + logit_n_logsumexp)
 
         return loss.mean()

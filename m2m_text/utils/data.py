@@ -4,12 +4,12 @@ Created on 2021/01/07
 """
 import os
 import pickle
+import shutil
 from collections import Counter
 from typing import Iterable, Optional, Union
 
 import joblib
 import numpy as np
-from typing import Union
 import scipy.sparse as sp
 from gensim.models import KeyedVectors
 from scipy.sparse import csc_matrix, csr_matrix
@@ -225,3 +225,10 @@ def get_n_samples_per_class(y: Union[np.ndarray, csr_matrix]):
             n_samples_per_class[i] = count
 
     return n_samples_per_class
+
+
+def copy_file(src: str, dst: str) -> None:
+    try:
+        shutil.copyfile(src, dst)
+    except shutil.SameFileError:
+        pass

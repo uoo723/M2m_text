@@ -3,11 +3,14 @@ Created on 2021/01/07
 @author Sangwoo Han
 """
 from collections import deque
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 from logzero import logger
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 
 def make_step(grad, attack, step_size, shape=torch.Size([-1, 1, 1, 1])):
@@ -99,3 +102,64 @@ def swap_swa_params(model, swa_state):
 
     for n, p in model.named_parameters():
         p.data, swa_state[n] = swa_state[n], p.data
+
+
+def get_label_embeddings(
+    label_encoder: nn.Module,
+    batch_size: int = 128,
+    device: torch.device = torch.device("cpu"),
+) -> np.ndarray:
+    label_embeddings = []
+    label_encoder.eval()
+
+    emb = (
+        label_encoder.module.emb.emb
+        if isinstance(label_encoder, nn.DataParallel)
+        else label_encoder.emb.emb
+    )
+    label_ids = torch.arange(emb.num_embeddings)
+
+    while label_ids.shape[0] > 0:
+        with torch.no_grad():
+            label_embeddings.append(
+                label_encoder(label_ids[:batch_size].to(device), mp_enabled=False)
+                .cpu()
+                .numpy()
+            )
+        label_ids = label_ids[batch_size:]
+
+    return np.concatenate(label_embeddings)
+
+
+def get_embeddings(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device = torch.device("cpu"),
+    **tqdm_opt,
+) -> np.ndarray:
+    model.eval()
+
+    idx = []
+    embedding = []
+
+    for doc_ids, batch_x, _ in tqdm(dataloader, **tqdm_opt):
+        idx.append(doc_ids.numpy())
+        with torch.no_grad():
+            embedding.append(
+                model(to_device(batch_x, device), mp_enabled=False)[0].cpu().numpy()
+            )
+    idx = np.concatenate(idx)
+    embedding = np.concatenate(embedding)
+
+    return embedding[np.argsort(idx)]
+
+
+def to_device(
+    inputs: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    device: torch.device = torch.device("cpu"),
+) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+    return (
+        {k: v.to(device) for k, v in inputs.items()}
+        if type(inputs) == dict
+        else inputs.to(device)
+    )

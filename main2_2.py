@@ -11,9 +11,8 @@ import warnings
 from collections import deque
 from datetime import timedelta
 from functools import wraps
-from multiprocessing import Process
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple, Union
+from typing import Dict, Iterable, Optional, Tuple
 
 import click
 import logzero
@@ -22,6 +21,7 @@ import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
+from scipy.sparse import lil_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
 from torch.cuda.amp import GradScaler
@@ -29,13 +29,12 @@ from torch.optim import Optimizer
 from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import TensorDataset
-from tqdm.auto import tqdm
 
-from m2m_text.anns import HNSW
-from m2m_text.datasets.text import TextDataset
+from m2m_text.anns import HNSW, build_ann, build_ann_async, copy_ann_index, load_ann
 from m2m_text.datasets import AmazonCat13K, EURLex4K, Wiki10, Wiki10_31K
 from m2m_text.datasets.custom import IDDataset
 from m2m_text.datasets.sbert import SBertDataset, collate_fn
+from m2m_text.datasets.text import TextDataset
 from m2m_text.loss import CircleLoss, CircleLoss2, CircleLoss3
 from m2m_text.metrics import (
     get_inv_propensity,
@@ -47,9 +46,17 @@ from m2m_text.metrics import (
 )
 from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
-from m2m_text.utils.data import get_mlb
+from m2m_text.utils.data import copy_file, get_mlb
 from m2m_text.utils.model import load_checkpoint, save_checkpoint
-from m2m_text.utils.train import clip_gradient, swa_init, swa_step, swap_swa_params
+from m2m_text.utils.train import (
+    clip_gradient,
+    get_embeddings,
+    get_label_embeddings,
+    swa_init,
+    swa_step,
+    swap_swa_params,
+    to_device,
+)
 
 DATASET_CLS = {
     "AmazonCat13K": AmazonCat13K,
@@ -72,23 +79,41 @@ TRANSFORMER_MODELS = ["SBert"]
 
 class Collector:
     def __init__(
-        self, dataset: Subset[TextDataset], pos_num: int = 10, neg_num: int = 10
+        self,
+        dataset: Subset[TextDataset],
+        pos_num: int = 10,
+        neg_num: int = 10,
+        pos_num_labels: int = 0,
     ) -> None:
-        self.dataset = dataset.dataset
-        self.inverted_index = dataset.dataset.y[dataset.indices].T.tocsr()
+        y = dataset.dataset.y[dataset.indices]
+        self.inverted_index = y.T.tocsr()
         self.pos_num = pos_num
         self.neg_num = neg_num
+        self.pos_num_labels = pos_num_labels
+
+        if self.pos_num_labels > 0:
+            self.adj = lil_matrix(y.T @ y)
+            self.adj.setdiag(0)
+            self.adj = self.adj.tocsr()
 
     def __call__(
         self, batch: Iterable[Tuple[torch.Tensor, ...]]
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        label_ids = np.stack([b[0].item() for b in batch])
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        label_ids = np.array([b[0].item() for b in batch])
         pos = []
         neg = []
+        pos_labels = []
+        pos_label_mask = []
 
         doc_ids = np.unique(self.inverted_index[label_ids].indices)
 
-        for label_id in label_ids:
+        for i, label_id in enumerate(label_ids):
             pos_doc_ids = self.inverted_index[label_id].indices
             sampled_idx = np.random.choice(
                 pos_doc_ids,
@@ -108,28 +133,51 @@ class Collector:
             if len(neg_samples) > 0:
                 neg.append(torch.LongTensor(neg_samples))
 
-        if len(neg) > 0:
-            return torch.from_numpy(label_ids), torch.stack(pos), torch.stack(neg)
-        else:
-            return torch.from_numpy(label_ids), torch.stack(pos), None
+            if self.pos_num_labels > 0:
+                candidate_pos_labels = self.adj[label_id].indices
+                if candidate_pos_labels.shape[0] > 0:
+                    pos_label_mask.append(i)
+                    pos_labels.append(
+                        torch.LongTensor(
+                            np.random.choice(
+                                candidate_pos_labels,
+                                size=(self.pos_num_labels,),
+                                replace=candidate_pos_labels.shape[0]
+                                < self.pos_num_labels,
+                            )
+                        )
+                    )
+
+        neg = torch.stack(neg) if len(neg) > 0 else None
+        pos_labels = torch.stack(pos_labels) if len(pos_labels) > 0 else None
+        pos_label_mask = (
+            torch.LongTensor(pos_label_mask) if pos_labels is not None else None
+        )
+
+        return (
+            torch.from_numpy(label_ids),
+            torch.stack(pos),
+            neg,
+            pos_labels,
+            pos_label_mask,
+        )
 
 
 def model_outputs(
     model: nn.Module,
-    dataset: TextDataset,
+    dataset: Subset[TextDataset],
     batch_pos: torch.Tensor,
     batch_neg: Optional[torch.Tensor],
     device: torch.device = torch.device("cpu"),
     **model_args,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if batch_neg is not None:
-        doc_ids = torch.cat([batch_pos.flatten(), batch_neg.flatten()])
+        doc_ids = torch.cat([batch_pos.flatten(), batch_neg.flatten()]).unique()
     else:
-        doc_ids = batch_pos.flatten()
+        doc_ids = batch_pos.flatten().unique()
 
     mapper = {doc_id.item(): i for i, doc_id in enumerate(doc_ids)}
-    inputs = torch.stack([dataset[idx][0] for idx in doc_ids])
-
+    inputs = dataset[doc_ids][0]
     outputs = model(inputs.to(device), **model_args)[0]
 
     batch_pos_idx = torch.LongTensor(
@@ -195,156 +243,15 @@ def get_model(
     return model
 
 
-def get_embeddings(
-    model: nn.Module,
-    dataloader: DataLoader,
-    device: torch.device = torch.device("cpu"),
-    **tqdm_opt,
-) -> np.ndarray:
-    model.eval()
-
-    idx = []
-    embedding = []
-
-    for doc_ids, batch_x, _ in tqdm(dataloader, **tqdm_opt):
-        idx.append(doc_ids.numpy())
-        with torch.no_grad():
-            embedding.append(
-                model(to_device(batch_x, device), mp_enabled=False)[0].cpu().numpy()
-            )
-    idx = np.concatenate(idx)
-    embedding = np.concatenate(embedding)
-
-    return embedding[np.argsort(idx)]
-
-
-def get_label_embeddings(
-    label_encoder: nn.Module,
-    batch_size: int = 128,
-    device: torch.device = torch.device("cpu"),
-) -> np.ndarray:
-    label_embeddings = []
-    label_encoder.eval()
-
-    emb = (
-        label_encoder.module.emb.emb
-        if isinstance(label_encoder, nn.DataParallel)
-        else label_encoder.emb.emb
-    )
-    label_ids = torch.arange(emb.num_embeddings)
-
-    while label_ids.shape[0] > 0:
-        with torch.no_grad():
-            label_embeddings.append(
-                label_encoder(label_ids[:batch_size].to(device), mp_enabled=False)
-                .cpu()
-                .numpy()
-            )
-        label_ids = label_ids[batch_size:]
-
-    return np.concatenate(label_embeddings)
-
-
-def build_ann(
-    embeddings: Optional[np.ndarray] = None,
-    M: int = 100,
-    efC: int = 300,
-    efS: int = 500,
-    n_candidates: int = 500,
-    metric: str = "cosine",
-    n_jobs: int = -1,
-    filepath: Optional[str] = None,
-    embedding_filepath: Optional[str] = None,
-) -> HNSW:
-    index = HNSW(
-        M=M, efC=efC, efS=efS, n_candidates=n_candidates, metric=metric, n_jobs=n_jobs
-    )
-
-    if embeddings is not None:
-        index.fit(embeddings)
-
-    if filepath is not None:
-        assert embedding_filepath is not None
-
-        index.save_index(filepath)
-        np.save(embedding_filepath, embeddings)
-
-    return index
-
-
-def build_ann_async(
-    filepath: str,
-    embedding_filepath: str,
-    embeddings: np.ndarray,
-    M: int = 100,
-    efC: int = 300,
-    efS: int = 500,
-    n_candidates: int = 500,
-    metric: str = "cosine",
-    n_jobs: int = -1,
-) -> Process:
-    p = Process(
-        target=build_ann,
-        args=(
-            embeddings,
-            M,
-            efC,
-            efS,
-            n_candidates,
-            metric,
-            n_jobs,
-            filepath,
-            embedding_filepath,
-        ),
-    )
-
-    p.start()
-
-    return p
-
-
-def load_ann(
-    index: HNSW,
-    filepath: str,
-    embedding_filepath: str,
-    p: Optional[Process] = None,
-) -> bool:
-    if p is not None:
-        if p.is_alive():
-            return False
-
-        if p.exitcode != 0:
-            raise Exception(f"Building process failed. exit code: {p.exitcode}")
-
-    index.load_index(filepath)
-    index.embeddings = np.load(embedding_filepath)
-
-    return True
-
-
-def copy_ann_index(src: str, dst: str) -> None:
-    shutil.copyfile(src, dst)
-    shutil.copyfile(src + ".dat", dst + ".dat")
-
-
-def to_device(
-    inputs: Union[torch.Tensor, Dict[str, torch.Tensor]],
-    device: torch.device = torch.device("cpu"),
-) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
-    return (
-        {k: v.to(device) for k, v in inputs.items()}
-        if type(inputs) == dict
-        else inputs.to(device)
-    )
-
-
 def train_step(
-    dataset: TextDataset,
+    dataset: Subset[TextDataset],
     model: nn.Module,
     label_encoder: nn.Module,
     batch_anchor: torch.Tensor,
     batch_positive: torch.Tensor,
     batch_negative: Optional[torch.Tensor],
+    batch_pos_labels: Optional[torch.Tensor],
+    batch_pos_label_mask: Optional[torch.Tensor],
     criterion: nn.Module,
     scaler: Optional[GradScaler] = None,
     optim: Optional[Optimizer] = None,
@@ -364,6 +271,16 @@ def train_step(
                 model, dataset, batch_positive, batch_negative, device
             )
             loss = criterion(anchor_outputs, positive_outputs, negative_outputs)
+
+            if batch_pos_labels is not None:
+                pos_label_outputs = label_encoder(batch_pos_labels.to(device))
+                pos_label_loss = criterion(
+                    anchor_outputs[batch_pos_label_mask], pos_label_outputs, None
+                )
+            else:
+                pos_label_loss = 0
+
+            loss = loss + pos_label_loss
 
         if is_train:
             optim.zero_grad()
@@ -418,13 +335,6 @@ def get_results(
             results["psp5"] = psp5
 
     return results
-
-
-def copy_file(src: str, dst: str) -> None:
-    try:
-        shutil.copyfile(src, dst)
-    except shutil.SameFileError:
-        pass
 
 
 def get_optimizer(
@@ -579,16 +489,13 @@ def get_optimizer(
     "--gamma", type=click.FLOAT, default=1.0, help="Scale factor of Circle loss"
 )
 @click.option(
-    "--normalize-loss-pos-weights",
-    is_flag=True,
-    default=False,
-    help="normalize loss pos weights",
-)
-@click.option(
     "--metric",
     type=click.Choice(["cosine", "euclidean"]),
     default="cosine",
     help="metric function to be used",
+)
+@click.option(
+    "--pos-num-labels", type=click.INT, default=0, help="# of pos labels to sample"
 )
 @log_elapsed_time
 def main(
@@ -625,8 +532,8 @@ def main(
     gradient_max_norm: float,
     m: float,
     gamma: float,
-    normalize_loss_pos_weights: bool,
     metric: str,
+    pos_num_labels: int,
 ):
     if loss_name != "circle3":
         assert metric == "cosine"
@@ -709,13 +616,6 @@ def main(
             train=False, **data_cnf["dataset"], **model_cnf.get("dataset", {})
         )
         inv_w = get_inv_propensity(train_dataset.y)
-        inv_w_tensor = torch.from_numpy(inv_w)
-
-        if normalize_loss_pos_weights:
-            inv_w_tensor = inv_w_tensor / inv_w_tensor.max()
-            # inv_w_tensor = (inv_w_tensor - inv_w_tensor.min()) / (
-            #     inv_w_tensor.max() - inv_w_tensor.min()
-            # )
 
         mlb = get_mlb(train_dataset.le_path)
         num_labels = train_dataset.y.shape[1]
@@ -815,16 +715,10 @@ def main(
     else:
         id_dataset = IDDataset(train_dataset)
 
-        train_dataloader = DataLoader(
-            Subset(id_dataset, train_ids),
-            batch_size=train_batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-
         label_ids = torch.arange(num_labels)
         label_mask = train_dataset.y[train_ids].sum(axis=0).A1.astype(np.bool)
+
+        train_subset_dataset = Subset(train_dataset, train_ids)
 
         train_dataloader = DataLoader(
             TensorDataset(label_ids[label_mask]),
@@ -832,7 +726,10 @@ def main(
             shuffle=True,
             num_workers=num_workers,
             collate_fn=Collector(
-                Subset(train_dataset, train_ids), pos_num_samples, neg_num_samples
+                train_subset_dataset,
+                pos_num_samples,
+                neg_num_samples,
+                pos_num_labels,
             ),
             pin_memory=False if no_cuda else True,
         )
@@ -940,9 +837,13 @@ def main(
                 if early_stop:
                     break
 
-                for i, (batch_labels, batch_pos, batch_neg) in enumerate(
-                    train_dataloader, 1
-                ):
+                for i, (
+                    batch_labels,
+                    batch_pos,
+                    batch_neg,
+                    batch_pos_labels,
+                    batch_pos_label_mask,
+                ) in enumerate(train_dataloader, 1):
                     if early_stop:
                         break
 
@@ -975,12 +876,14 @@ def main(
                         )
 
                     train_loss = train_step(
-                        train_dataset,
+                        train_subset_dataset,
                         model,
                         label_encoder,
                         to_device(batch_labels, device),
                         batch_pos,
                         batch_neg,
+                        batch_pos_labels,
+                        batch_pos_label_mask,
                         criterion,
                         scaler,
                         optimizer,

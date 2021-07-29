@@ -21,12 +21,7 @@ from m2m_text.utils.mlflow import log_metric
 from .metrics import get_accuracy, get_inv_propensity, get_precision_results
 from .utils.data import get_mlb
 from .utils.model import save_checkpoint
-from .utils.train import (
-    clip_gradient,
-    swa_init,
-    swa_step,
-    swap_swa_params,
-)
+from .utils.train import clip_gradient, swa_init, swa_step, swap_swa_params
 
 
 def train_step(
