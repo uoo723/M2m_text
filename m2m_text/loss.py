@@ -150,16 +150,19 @@ class CircleLoss3(nn.Module):
     def forward(
         self,
         anchor: torch.Tensor,
-        pos: torch.Tensor,
+        pos: Optional[torch.Tensor] = None,
         neg: Optional[torch.Tensor] = None,
         pos_weights: torch.Tensor = None,
     ) -> torch.Tensor:
-        sp = self.distance(anchor, pos)
-        ap = torch.clamp_min(-sp.detach() + 1 + self.m, min=0.0)
-        delta_p = 1 - self.m
-        weights = 1.0 if pos_weights is None else pos_weights
-        logit_p = -ap * (sp - delta_p) * self.gamma * weights
-        logit_p_logsumexp = torch.logsumexp(logit_p, dim=-1)
+        if pos is not None:
+            sp = self.distance(anchor, pos)
+            ap = torch.clamp_min(-sp.detach() + 1 + self.m, min=0.0)
+            delta_p = 1 - self.m
+            weights = 1.0 if pos_weights is None else pos_weights
+            logit_p = -ap * (sp - delta_p) * self.gamma * weights
+            logit_p_logsumexp = torch.logsumexp(logit_p, dim=-1)
+        else:
+            logit_p_logsumexp = torch.tensor(0.0)
 
         if neg is not None:
             sn = self.distance(anchor, neg)
@@ -169,8 +172,6 @@ class CircleLoss3(nn.Module):
             logit_n = an * (sn - delta_n) * self.gamma * neg_weights
             logit_n_logsumexp = torch.logsumexp(logit_n, dim=-1)
         else:
-            logit_n_logsumexp = 0
+            logit_n_logsumexp = torch.tensor(0.0)
 
-        loss = F.softplus(logit_p_logsumexp + logit_n_logsumexp)
-
-        return loss.mean()
+        return F.softplus(logit_p_logsumexp + logit_n_logsumexp).mean()

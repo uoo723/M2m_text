@@ -84,15 +84,22 @@ class Collector:
         pos_num: int = 10,
         neg_num: int = 10,
         pos_num_labels: int = 0,
+        instance_pos_neg_num: Tuple[int, int] = (0, 0, 0),
+        ann_index: Optional[HNSW] = None,
     ) -> None:
-        y = dataset.dataset.y[dataset.indices]
-        self.inverted_index = y.T.tocsr()
+        if instance_pos_neg_num[0] > 0:
+            assert ann_index is not None
+
+        self.y = dataset.dataset.y[dataset.indices]
+        self.inverted_index = self.y.T.tocsr()
         self.pos_num = pos_num
         self.neg_num = neg_num
         self.pos_num_labels = pos_num_labels
+        self.instance_pos_neg_num = instance_pos_neg_num
+        self.ann_index = ann_index
 
         if self.pos_num_labels > 0:
-            self.adj = lil_matrix(y.T @ y)
+            self.adj = lil_matrix(self.y.T @ self.y)
             self.adj.setdiag(0)
             self.adj = self.adj.tocsr()
 
@@ -105,22 +112,22 @@ class Collector:
         Optional[torch.Tensor],
         Optional[torch.Tensor],
     ]:
-        label_ids = np.array([b[0].item() for b in batch])
-        pos = []
-        neg = []
+        anchor_label_ids = np.array([b[0].item() for b in batch])
+        instance_pos = []
+        instance_neg = []
         pos_labels = []
         pos_label_mask = []
 
-        doc_ids = np.unique(self.inverted_index[label_ids].indices)
+        doc_ids = np.unique(self.inverted_index[anchor_label_ids].indices)
 
-        for i, label_id in enumerate(label_ids):
+        for i, label_id in enumerate(anchor_label_ids):
             pos_doc_ids = self.inverted_index[label_id].indices
             sampled_idx = np.random.choice(
                 pos_doc_ids,
                 size=(self.pos_num,),
                 replace=pos_doc_ids.shape[0] < self.pos_num,
             )
-            pos.append(torch.from_numpy(sampled_idx))
+            instance_pos.append(torch.from_numpy(sampled_idx))
 
             neg_samples = []
 
@@ -131,7 +138,7 @@ class Collector:
                     neg_samples.append(doc_id)
 
             if len(neg_samples) > 0:
-                neg.append(torch.LongTensor(neg_samples))
+                instance_neg.append(torch.LongTensor(neg_samples))
 
             if self.pos_num_labels > 0:
                 candidate_pos_labels = self.adj[label_id].indices
@@ -148,18 +155,72 @@ class Collector:
                         )
                     )
 
-        neg = torch.stack(neg) if len(neg) > 0 else None
+        instance_neg = torch.stack(instance_neg) if len(instance_neg) > 0 else None
         pos_labels = torch.stack(pos_labels) if len(pos_labels) > 0 else None
         pos_label_mask = (
             torch.LongTensor(pos_label_mask) if pos_labels is not None else None
         )
 
+        label_pos = []
+        label_neg = []
+        if self.instance_pos_neg_num[0] > 0:
+            anchor_doc_ids = np.random.choice(
+                doc_ids, size=(self.instance_pos_neg_num[0],), replace=False
+            )
+            doc_emb = self.ann_index.input_embeddings[anchor_doc_ids]
+            neigh = self.ann_index.kneighbors(doc_emb, return_distance=False)
+
+            for i, doc_id in enumerate(anchor_doc_ids):
+                label_idx = self.y[doc_id].indices
+
+                pos_label_samples = np.random.choice(
+                    label_idx,
+                    size=(self.instance_pos_neg_num[1],),
+                    replace=len(label_idx) < self.instance_pos_neg_num[1],
+                )
+
+                neg_label_samples = []
+                for neigh_label_id in neigh[i]:
+                    if len(neg_label_samples) >= self.instance_pos_neg_num[1]:
+                        break
+
+                    if neigh_label_id != -1 and neigh_label_id not in label_idx:
+                        neg_label_samples.append(neigh_label_id)
+
+                assert len(neg_label_samples) == self.instance_pos_neg_num[1], len(
+                    neg_label_samples
+                )
+
+                if len(pos_label_samples) > 0:
+                    label_pos.append(torch.from_numpy(pos_label_samples).long())
+
+                if len(label_neg) > 0:
+                    label_neg.append(torch.LongTensor(neg_label_samples))
+
+            anchor_doc_ids = torch.LongTensor(anchor_doc_ids)
+            label_pos = torch.stack(label_pos) if len(label_pos) > 0 else None
+            label_neg = torch.stack(label_neg) if len(label_neg) > 0 else None
+
+        else:
+            anchor_doc_ids = None
+            label_pos = None
+            label_neg = None
+
         return (
-            torch.from_numpy(label_ids),
-            torch.stack(pos),
-            neg,
-            pos_labels,
-            pos_label_mask,
+            (
+                torch.from_numpy(anchor_label_ids),
+                torch.stack(instance_pos),
+                instance_neg,
+            ),
+            (
+                pos_labels,
+                pos_label_mask,
+            ),
+            (
+                anchor_doc_ids,
+                label_pos,
+                label_neg,
+            ),
         )
 
 
@@ -167,14 +228,20 @@ def model_outputs(
     model: nn.Module,
     dataset: Subset[TextDataset],
     batch_pos: torch.Tensor,
-    batch_neg: Optional[torch.Tensor],
+    batch_neg: Optional[torch.Tensor] = None,
+    batch_anchor: Optional[torch.Tensor] = None,
     device: torch.device = torch.device("cpu"),
     **model_args,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    doc_ids = [batch_pos.flatten()]
+
     if batch_neg is not None:
-        doc_ids = torch.cat([batch_pos.flatten(), batch_neg.flatten()]).unique()
-    else:
-        doc_ids = batch_pos.flatten().unique()
+        doc_ids.append(batch_neg.flatten())
+
+    if batch_anchor is not None:
+        doc_ids.append(batch_anchor.flatten())
+
+    doc_ids = torch.cat(doc_ids).unique()
 
     mapper = {doc_id.item(): i for i, doc_id in enumerate(doc_ids)}
     inputs = dataset[doc_ids][0]
@@ -193,7 +260,15 @@ def model_outputs(
     else:
         batch_neg = None
 
-    return batch_pos, batch_neg
+    if batch_anchor is not None:
+        batch_anchor_idx = torch.LongTensor(
+            [mapper[idx.item()] for idx in batch_anchor.flatten()]
+        )
+        batch_anchor = outputs[batch_anchor_idx].view(*batch_anchor.size(), -1)
+    else:
+        batch_anchor = None
+
+    return batch_pos, batch_neg, batch_anchor
 
 
 def log_elapsed_time(func):
@@ -247,11 +322,15 @@ def train_step(
     dataset: Subset[TextDataset],
     model: nn.Module,
     label_encoder: nn.Module,
+    ann_index: HNSW,
     batch_anchor: torch.Tensor,
     batch_positive: torch.Tensor,
     batch_negative: Optional[torch.Tensor],
     batch_pos_labels: Optional[torch.Tensor],
     batch_pos_label_mask: Optional[torch.Tensor],
+    batch_anchor_doc_ids: Optional[torch.Tensor],
+    batch_pos_labels2: Optional[torch.Tensor],
+    batch_neg_labels: Optional[torch.Tensor],
     criterion: nn.Module,
     scaler: Optional[GradScaler] = None,
     optim: Optional[Optimizer] = None,
@@ -267,20 +346,42 @@ def train_step(
     with torch.set_grad_enabled(is_train):
         with torch.cuda.amp.autocast(enabled=mp_enabled):
             anchor_outputs = label_encoder(batch_anchor)
-            positive_outputs, negative_outputs = model_outputs(
-                model, dataset, batch_positive, batch_negative, device
+            positive_outputs, negative_outputs, doc_outputs = model_outputs(
+                model,
+                dataset,
+                batch_positive,
+                batch_negative,
+                batch_anchor_doc_ids,
+                device,
             )
             loss = criterion(anchor_outputs, positive_outputs, negative_outputs)
 
             if batch_pos_labels is not None:
                 pos_label_outputs = label_encoder(batch_pos_labels.to(device))
                 pos_label_loss = criterion(
-                    anchor_outputs[batch_pos_label_mask], pos_label_outputs, None
+                    anchor_outputs[batch_pos_label_mask], pos_label_outputs
                 )
             else:
                 pos_label_loss = 0
 
-            loss = loss + pos_label_loss
+            if doc_outputs is not None:
+                ann_index.input_embeddings[batch_anchor_doc_ids] = (
+                    doc_outputs.detach().cpu().float().numpy()
+                )
+
+                if batch_pos_labels2 is not None:
+                    batch_pos_labels2 = label_encoder(batch_pos_labels2.to(device))
+
+                if batch_neg_labels is not None:
+                    batch_neg_labels = label_encoder(batch_neg_labels.to(device))
+
+                anchor_doc_loss = criterion(
+                    doc_outputs, batch_pos_labels2, batch_neg_labels
+                )
+            else:
+                anchor_doc_loss = 0
+
+            loss = loss + pos_label_loss + anchor_doc_loss
 
         if is_train:
             optim.zero_grad()
@@ -497,6 +598,14 @@ def get_optimizer(
 @click.option(
     "--pos-num-labels", type=click.INT, default=0, help="# of pos labels to sample"
 )
+@click.option(
+    "--instance-pos-neg-num",
+    type=click.INT,
+    nargs=3,
+    default=(0, 0, 0),
+    help="# of positive (negative) samples with respect to instance"
+    "[# of instance to sample, # of pos samples per inst., # of neg samples per inst.]",
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -534,10 +643,17 @@ def main(
     gamma: float,
     metric: str,
     pos_num_labels: int,
+    instance_pos_neg_num: Tuple[int, int],
 ):
+    ################################ Assert options ##################################
     if loss_name != "circle3":
         assert metric == "cosine"
 
+    if instance_pos_neg_num[0] > 0:
+        assert instance_pos_neg_num[1] + instance_pos_neg_num[2] > 0
+    ##################################################################################
+
+    ################################ Initialize Config ###############################
     yaml = YAML(typ="safe")
 
     model_cnf_path = model_cnf
@@ -603,6 +719,7 @@ def main(
 
     device = torch.device("cpu" if no_cuda else "cuda")
     num_gpus = torch.cuda.device_count()
+    ##################################################################################
 
     ################################ Prepare Dataset #################################
     logger.info(f"Dataset: {dataset_name}")
@@ -665,92 +782,6 @@ def main(
         logger.info("Single-GPU mode")
     else:
         logger.info("CPU mode")
-    ##################################################################################
-
-    ############################### Prepare Dataloader ###############################
-    logger.info(f"Preparing dataloader for {model_name}")
-
-    if model_name in TRANSFORMER_MODELS:
-        tokenizer = (
-            model.module.tokenize
-            if isinstance(model, nn.DataParallel)
-            else model.tokenize
-        )
-
-        train_sbert_dataset = SBertDataset(
-            tokenizer(train_tokenized_texts[train_mask]),
-            train_dataset.y[train_mask],
-        )
-        valid_sbert_dataset = SBertDataset(
-            tokenizer(train_tokenized_texts[~train_mask]),
-            train_dataset.y[~train_mask],
-        )
-        test_sbert_dataset = SBertDataset(
-            tokenizer(test_tokenized_texts),
-            test_dataset.y,
-        )
-
-        train_dataloader = DataLoader(
-            train_sbert_dataset,
-            batch_size=train_batch_size,
-            shuffle=True,
-            collate_fn=collate_fn,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-        valid_dataloader = DataLoader(
-            valid_sbert_dataset,
-            batch_size=test_batch_size,
-            collate_fn=collate_fn,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-        test_dataloader = DataLoader(
-            test_sbert_dataset,
-            batch_size=test_batch_size,
-            collate_fn=collate_fn,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-    else:
-        id_dataset = IDDataset(train_dataset)
-
-        label_ids = torch.arange(num_labels)
-        label_mask = train_dataset.y[train_ids].sum(axis=0).A1.astype(np.bool)
-
-        train_subset_dataset = Subset(train_dataset, train_ids)
-
-        train_dataloader = DataLoader(
-            TensorDataset(label_ids[label_mask]),
-            batch_size=train_batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            collate_fn=Collector(
-                train_subset_dataset,
-                pos_num_samples,
-                neg_num_samples,
-                pos_num_labels,
-            ),
-            pin_memory=False if no_cuda else True,
-        )
-        valid_dataloader = DataLoader(
-            Subset(id_dataset, valid_ids),
-            batch_size=test_batch_size,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-        test_dataloader = DataLoader(
-            IDDataset(test_dataset),
-            batch_size=test_batch_size,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
-        full_dataloader = DataLoader(
-            id_dataset,
-            batch_size=test_batch_size,
-            num_workers=num_workers,
-            pin_memory=False if no_cuda else True,
-        )
     ##################################################################################
 
     ############################### Prepare Training #################################
@@ -821,9 +852,107 @@ def main(
             logger.warning("No checkpoint")
 
     if ann_index is None and mode == "train":
-        ann_index = build_ann(
-            n_candidates=ann_candidates, efS=ann_candidates, metric=metric
+        embeddings = (
+            get_label_embeddings(label_encoder, device=device)
+            if instance_pos_neg_num[0] > 0
+            else None
         )
+
+        ann_index = build_ann(
+            embeddings=embeddings,
+            n_candidates=ann_candidates,
+            efS=ann_candidates,
+            metric=metric,
+        )
+    ##################################################################################
+
+    ############################### Prepare Dataloader ###############################
+    logger.info(f"Preparing dataloader for {model_name}")
+
+    if model_name in TRANSFORMER_MODELS:
+        tokenizer = (
+            model.module.tokenize
+            if isinstance(model, nn.DataParallel)
+            else model.tokenize
+        )
+
+        train_sbert_dataset = SBertDataset(
+            tokenizer(train_tokenized_texts[train_mask]),
+            train_dataset.y[train_mask],
+        )
+        valid_sbert_dataset = SBertDataset(
+            tokenizer(train_tokenized_texts[~train_mask]),
+            train_dataset.y[~train_mask],
+        )
+        test_sbert_dataset = SBertDataset(
+            tokenizer(test_tokenized_texts),
+            test_dataset.y,
+        )
+
+        train_dataloader = DataLoader(
+            train_sbert_dataset,
+            batch_size=train_batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        valid_dataloader = DataLoader(
+            valid_sbert_dataset,
+            batch_size=test_batch_size,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        test_dataloader = DataLoader(
+            test_sbert_dataset,
+            batch_size=test_batch_size,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+    else:
+        id_dataset = IDDataset(train_dataset)
+
+        label_ids = torch.arange(num_labels)
+        label_mask = train_dataset.y[train_ids].sum(axis=0).A1.astype(np.bool)
+
+        train_subset_dataset = Subset(train_dataset, train_ids)
+
+        train_dataloader = DataLoader(
+            TensorDataset(label_ids[label_mask]),
+            batch_size=train_batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=Collector(
+                train_subset_dataset,
+                pos_num_samples,
+                neg_num_samples,
+                pos_num_labels,
+                instance_pos_neg_num,
+                ann_index,
+            ),
+            pin_memory=False if no_cuda else True,
+        )
+        valid_dataloader = DataLoader(
+            Subset(id_dataset, valid_ids),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        test_dataloader = DataLoader(
+            IDDataset(test_dataset),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        train_dataloader2 = DataLoader(
+            IDDataset(Subset(train_dataset, train_ids)),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        ann_index.input_embeddings = get_embeddings(model, train_dataloader2, device)
     ##################################################################################
 
     logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
@@ -838,11 +967,9 @@ def main(
                     break
 
                 for i, (
-                    batch_labels,
-                    batch_pos,
-                    batch_neg,
-                    batch_pos_labels,
-                    batch_pos_label_mask,
+                    (batch_anchor_labels, batch_pos, batch_neg),
+                    (batch_pos_labels, batch_pos_label_mask),
+                    (batch_anchor_doc_ids, batch_pos_labels2, batch_neg_labels),
                 ) in enumerate(train_dataloader, 1):
                     if early_stop:
                         break
@@ -879,11 +1006,15 @@ def main(
                         train_subset_dataset,
                         model,
                         label_encoder,
-                        to_device(batch_labels, device),
+                        ann_index,
+                        to_device(batch_anchor_labels, device),
                         batch_pos,
                         batch_neg,
                         batch_pos_labels,
                         batch_pos_label_mask,
+                        batch_anchor_doc_ids,
+                        batch_pos_labels2,
+                        batch_neg_labels,
                         criterion,
                         scaler,
                         optimizer,

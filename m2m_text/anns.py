@@ -153,14 +153,23 @@ class HNSW(ApproximateNearestNeighbor):
         self.post_processing = post_processing
         self.space = None
         self._embeddings = None
+        self._input_embeddings = None
 
     @property
-    def embeddings(self):
+    def embeddings(self) -> np.ndarray:
         return self._embeddings
 
     @embeddings.setter
-    def embeddings(self, value):
+    def embeddings(self, value: np.ndarray) -> None:
         self._embeddings = value
+
+    @property
+    def input_embeddings(self) -> np.ndarray:
+        return self._input_embeddings
+
+    @input_embeddings.setter
+    def input_embeddings(self, value: np.ndarray) -> None:
+        self._input_embeddings = value
 
     def set_space(self):
         if self.metric in [
