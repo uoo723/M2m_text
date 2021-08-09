@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# export MLFLOW_TRACKING_URI=http://115.145.135.65:5050
-# export MLFLOW_EXPERIMENT_NAME=Cornet
+export MLFLOW_TRACKING_URI=http://115.145.135.65:5050
+export MLFLOW_EXPERIMENT_NAME=Cornet
 
 DATASET=EURLex-4K
 # DATASET=AmazonCat13K
@@ -17,11 +17,16 @@ MODEL=AttentionRNN
 # MODEL=LabelGCNAttentionRNNv4
 # MODEL=EaseAttentionRNN
 
+# CKPT_ROOT_PATH="--ckpt-root-path /results/checkpoint"
+# LOG_DIR="--log-dir /results/logs"
+
 args=(
     --model-cnf config/models/$MODEL.yaml
     --data-cnf config/datasets/$DATASET.yaml
     --run-script $0
     # --test-run
+    $LOG_DIR
+    $CKPT_ROOT_PATH
     --no-scheduler
     --epoch 60
     --lr 1e-3
@@ -34,7 +39,7 @@ args=(
     --swa-warmup 10
     --eval-step 100
     --early 50
-    # --net-t ./checkpoint/label_emb_init_LabelGCNAttentionRNNv4_EURLex4K_1240_last.pt
+    # --net-t ./checkpoint/lambda_1e-5_LabelGCNAttentionRNNv4_EURLex4K_1250_last.pt
 )
 
 python main.py "${args[@]}"

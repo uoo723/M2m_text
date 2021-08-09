@@ -1,35 +1,34 @@
 """
 Created on 2021/07/06
 @author Sangwoo Han
+
+Label Anchor
+
 """
 import multiprocessing
 import os
-import random
 import shutil
-import time
 import warnings
 from collections import deque
-from datetime import timedelta
-from functools import wraps
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
 import click
-import logzero
 import numpy as np
 import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
-from scipy.sparse import lil_matrix
+from scipy.sparse import csr_matrix, lil_matrix
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.preprocessing import MultiLabelBinarizer, normalize
 from torch.cuda.amp import GradScaler
 from torch.optim import Optimizer
 from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import TensorDataset
 
+import dgl
 from m2m_text.anns import HNSW, build_ann, build_ann_async, copy_ann_index, load_ann
 from m2m_text.datasets import AmazonCat13K, EURLex4K, Wiki10, Wiki10_31K
 from m2m_text.datasets.custom import IDDataset
@@ -44,7 +43,7 @@ from m2m_text.metrics import (
     get_psp_5,
     get_r_10,
 )
-from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, SBert
+from m2m_text.networks import AttentionRNNEncoder, LabelEncoder, LabelGINEncoder, SBert
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
 from m2m_text.utils.model import load_checkpoint, save_checkpoint
@@ -52,6 +51,10 @@ from m2m_text.utils.train import (
     clip_gradient,
     get_embeddings,
     get_label_embeddings,
+    log_elapsed_time,
+    save_embeddings,
+    set_logger,
+    set_seed,
     swa_init,
     swa_step,
     swap_swa_params,
@@ -72,6 +75,16 @@ MODEL_CLS = {
 
 LE_MODEL_CLS = {
     "LabelEncoder": LabelEncoder,
+    "LabelGINEncoder": LabelGINEncoder,
+}
+
+# not supported mixed precision
+NOT_SUPPORTED_MP = {
+    "LabelGINEncoder": LabelGINEncoder,
+}
+
+USE_GRAPH_MODEL = {
+    "LabelGINEncoder": LabelGINEncoder,
 }
 
 TRANSFORMER_MODELS = ["SBert"]
@@ -86,6 +99,7 @@ class Collector:
         pos_num_labels: int = 0,
         instance_pos_neg_num: Tuple[int, int] = (0, 0, 0),
         ann_index: Optional[HNSW] = None,
+        enable_hard_neg: bool = False,
     ) -> None:
         if instance_pos_neg_num[0] > 0:
             assert ann_index is not None
@@ -97,6 +111,7 @@ class Collector:
         self.pos_num_labels = pos_num_labels
         self.instance_pos_neg_num = instance_pos_neg_num
         self.ann_index = ann_index
+        self.enable_hard_neg = enable_hard_neg
 
         if self.pos_num_labels > 0:
             self.adj = lil_matrix(self.y.T @ self.y)
@@ -131,8 +146,19 @@ class Collector:
 
             neg_samples = []
 
+            if self.enable_hard_neg:
+                label_emb = self.ann_index.embeddings[[label_id]]
+                doc_emb = self.ann_index.input_embeddings[doc_ids]
+                sim = (normalize(label_emb) @ normalize(doc_emb).T)[0]
+                sorted_idx = sim.argsort()[::-1]
+                idx = 0
+
             while len(neg_samples) < self.neg_num:
-                doc_id = doc_ids[np.random.randint(doc_ids.shape[0], size=1)[0]]
+                if self.enable_hard_neg:
+                    doc_id = doc_ids[sorted_idx][idx]
+                    idx += 1
+                else:
+                    doc_id = np.random.choice(doc_ids)
 
                 if doc_id not in pos_doc_ids and doc_id not in neg_samples:
                     neg_samples.append(doc_id)
@@ -271,34 +297,6 @@ def model_outputs(
     return batch_pos, batch_neg, batch_anchor
 
 
-def log_elapsed_time(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        ret = func(*args, **kwargs)
-        end = time.time()
-
-        elapsed = end - start
-        logger.info(f"elapsed time: {end - start:.2f}s, {timedelta(seconds=elapsed)}")
-
-        return ret
-
-    return wrapper
-
-
-def set_logger(log_path: str):
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    logzero.logfile(log_path)
-
-
-def set_seed(seed: int):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-    torch.backends.cudnn.deterministic = True
-
-
 def get_model(
     model_name: str,
     model_cnf: dict,
@@ -316,6 +314,44 @@ def get_model(
         ).to(device)
 
     return model
+
+
+def get_label_encoder(
+    model_name: str,
+    le_model_cnf: dict,
+    num_labels: int,
+    emb_init: Optional[np.ndarray] = None,
+    mp_enabled: bool = False,
+    device: torch.device = torch.device("cpu"),
+    dataset: Optional[TextDataset] = None,
+) -> nn.Module:
+    kwargs = {}
+
+    if model_name in NOT_SUPPORTED_MP:
+        mp_enabled = False
+
+    if model_name in USE_GRAPH_MODEL:
+        assert dataset is not None
+        adj = lil_matrix(dataset.y.T @ dataset.y)
+        adj.setdiag(0)
+        adj = adj.tocsr()
+        src, dst = adj.nonzero()
+
+        u = np.concatenate([src, dst])
+        v = np.concatenate([dst, src])
+
+        g = dgl.graph((u, v))
+        kwargs = {"graph": g}
+
+    label_encoder = LE_MODEL_CLS[model_name](
+        emb_init=emb_init,
+        num_labels=num_labels,
+        mp_enabled=mp_enabled,
+        **le_model_cnf["model"],
+        **kwargs,
+    ).to(device)
+
+    return label_encoder
 
 
 def train_step(
@@ -408,6 +444,7 @@ def get_results(
     mlb: Optional[MultiLabelBinarizer] = None,
     inv_w: Optional[np.ndarray] = None,
     device: torch.device = torch.device("cpu"),
+    return_embeddings: bool = False,
 ) -> Dict[str, float]:
     if mlb is None:
         mlb = MultiLabelBinarizer(sparse_output=True).fit(raw_y)
@@ -435,7 +472,10 @@ def get_results(
             psp5 = get_psp_5(prediction, raw_y, inv_w, mlb)
             results["psp5"] = psp5
 
-    return results
+    if return_embeddings:
+        return results, test_embeddings
+
+    return (results,)
 
 
 def get_optimizer(
@@ -606,6 +646,24 @@ def get_optimizer(
     help="# of positive (negative) samples with respect to instance"
     "[# of instance to sample, # of pos samples per inst., # of neg samples per inst.]",
 )
+@click.option(
+    "--use-pretrained-label-emb",
+    is_flag=True,
+    default=False,
+    help="Use pretrained label embedding",
+)
+@click.option(
+    "--enable-hard-neg",
+    is_flag=True,
+    default=False,
+    help="Enable hard negative sampling",
+)
+@click.option(
+    "--record-embeddings",
+    is_flag=True,
+    default=False,
+    help="Save embeddings at every evaluation step",
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -644,6 +702,9 @@ def main(
     metric: str,
     pos_num_labels: int,
     instance_pos_neg_num: Tuple[int, int],
+    use_pretrained_label_emb: bool,
+    enable_hard_neg: bool,
+    record_embeddings: bool,
 ):
     ################################ Assert options ##################################
     if loss_name != "circle3":
@@ -683,17 +744,18 @@ def main(
         ckpt_root_path, "best_label_embeddings.npy"
     )
 
+    embeddings_filepath = os.path.join(ckpt_root_path, "embeddings.npz")
+
     os.makedirs(ckpt_root_path, exist_ok=True)
 
     if not resume and os.path.exists(ckpt_path) and mode == "train":
         click.confirm(
             "Checkpoint is already existed. Overwrite it?", abort=True, err=True
         )
+        shutil.rmtree(ckpt_root_path)
+        os.makedirs(ckpt_root_path, exist_ok=True)
 
     if not test_run:
-        logfile_path = os.path.join(ckpt_root_path, log_filename)
-        if os.path.exists(logfile_path) and not resume and mode == "train":
-            os.remove(logfile_path)
         set_logger(os.path.join(ckpt_root_path, log_filename))
 
         copy_file(
@@ -770,9 +832,21 @@ def main(
 
     model = get_model(model_name, model_cnf, data_cnf, mp_enabled, device)
 
-    label_encoder = LE_MODEL_CLS[le_model_name](
-        num_labels=num_labels, mp_enabled=mp_enabled, **le_model_cnf["model"]
-    ).to(device)
+    if use_pretrained_label_emb:
+        logger.info("Get label features")
+        labels_f = train_dataset.get_label_features()
+    else:
+        labels_f = None
+
+    label_encoder = get_label_encoder(
+        le_model_name,
+        le_model_cnf,
+        num_labels,
+        labels_f,
+        mp_enabled,
+        device,
+        train_dataset,
+    )
 
     if num_gpus > 1 and not no_cuda:
         logger.info(f"Multi-GPU mode: {num_gpus} GPUs")
@@ -852,11 +926,7 @@ def main(
             logger.warning("No checkpoint")
 
     if ann_index is None and mode == "train":
-        embeddings = (
-            get_label_embeddings(label_encoder, device=device)
-            if instance_pos_neg_num[0] > 0
-            else None
-        )
+        embeddings = get_label_embeddings(label_encoder, device=device)
 
         ann_index = build_ann(
             embeddings=embeddings,
@@ -931,6 +1001,7 @@ def main(
                 pos_num_labels,
                 instance_pos_neg_num,
                 ann_index,
+                enable_hard_neg,
             ),
             pin_memory=False if no_cuda else True,
         )
@@ -948,6 +1019,12 @@ def main(
         )
         train_dataloader2 = DataLoader(
             IDDataset(Subset(train_dataset, train_ids)),
+            batch_size=test_batch_size,
+            num_workers=num_workers,
+            pin_memory=False if no_cuda else True,
+        )
+        full_train_dataloader = DataLoader(
+            id_dataset,
             batch_size=test_batch_size,
             num_workers=num_workers,
             pin_memory=False if no_cuda else True,
@@ -1051,7 +1128,7 @@ def main(
                             )
                             ann_build_process = None
 
-                        results = get_results(
+                        ret = get_results(
                             model,
                             valid_dataloader,
                             train_dataset.raw_y[~train_mask],
@@ -1059,7 +1136,22 @@ def main(
                             mlb=mlb,
                             inv_w=inv_w,
                             device=device,
+                            return_embeddings=record_embeddings,
                         )
+
+                        results = ret[0]
+
+                        if record_embeddings:
+                            filepath, ext = os.path.splitext(embeddings_filepath)
+                            filepath = f"{filepath}_{global_step}" + ext
+                            save_embeddings(
+                                full_train_dataloader,
+                                test_dataloader,
+                                model,
+                                label_encoder,
+                                filepath,
+                                device,
+                            )
 
                         val_log_msg = (
                             f"p@5: {results['p5']:.5f} n@5: {results['n5']:.5f} "
@@ -1082,6 +1174,8 @@ def main(
                                 results=results,
                                 other_states={
                                     "best": best,
+                                    "train_ids": train_ids,
+                                    "valid_ids": valid_ids,
                                     "train_mask": train_mask,
                                     "model_swa_state": model_swa_state,
                                     "le_swa_state": le_swa_state,
@@ -1138,6 +1232,8 @@ def main(
             results=results,
             other_states={
                 "best": best,
+                "train_ids": train_ids,
+                "valid_ids": valid_ids,
                 "train_mask": train_mask,
                 "model_swa_state": model_swa_state,
                 "le_swa_state": le_swa_state,

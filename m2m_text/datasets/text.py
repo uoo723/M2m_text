@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 from logzero import logger
 from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
@@ -59,6 +60,7 @@ class TextDataset(Dataset):
         tokenized_filename: str = "tokenized_texts.pkl",
         label_encoder_filename: str = "label_encoder",
         emb_init_filename: str = "emb_init.npy",
+        labels_f_filename: str = "labels_f.npy",
         maxlen: int = 500,
         pad: str = "<PAD>",
         unknown: str = "<UNK>",
@@ -81,6 +83,7 @@ class TextDataset(Dataset):
         self.le_path = os.path.join(self.data_dir, label_encoder_filename)
         self.w2v_model_path = os.path.join(self.root, self.w2v_model)
         self.emb_init_path = os.path.join(self.data_dir, emb_init_filename)
+        self.labels_f_path = os.path.join(self.data_dir, labels_f_filename)
         self.pad = pad
         self.unknown = unknown
         self.maxlen = maxlen
@@ -164,15 +167,15 @@ class TextDataset(Dataset):
                 while start < len(texts):
                     batch_texts = texts[start:end]
                     inputs = tokenizer(
-                            batch_texts.tolist(),
-                            truncation=True,
-                            padding="max_length",
-                            return_tensors="np",
-                            max_length=self.maxlen,
-                        )
+                        batch_texts.tolist(),
+                        truncation=True,
+                        padding="max_length",
+                        return_tensors="np",
+                        max_length=self.maxlen,
+                    )
 
-                    input_ids.append(inputs['input_ids'])
-                    attention_mask.append(inputs['attention_mask'])
+                    input_ids.append(inputs["input_ids"])
+                    attention_mask.append(inputs["attention_mask"])
                     pbar.update(len(batch_texts))
 
                     start = end
@@ -242,22 +245,38 @@ class TextDataset(Dataset):
         self, max_features: int = 100_000, force: bool = False
     ) -> csr_matrix:
         """Return sparse (tf-idf) features."""
-        if not os.path.isfile(self.sparse_path):
+        if not os.path.isfile(self.sparse_path) or force:
             texts = None if os.path.isfile(self.tokenized_path) else self.raw_data()[0]
-            tokenized_texts = get_tokenized_texts(
-                self.tokenized_path, texts, self.num_cores
-            )
         else:
-            tokenized_texts = None
+            texts = None
 
         sparse_x = get_sparse_features(
-            self.sparse_path, tokenized_texts, max_features=max_features, force=force
+            self.sparse_path, texts, max_features=max_features, force=force
         )
 
         if self.split_indices is not None:
             sparse_x = sparse_x[self.split_indices]
 
         return sparse_x
+
+    def get_label_features(self) -> np.ndarray:
+        if os.path.exists(self.labels_f_path):
+            return np.load(self.labels_f_path)
+        else:
+            vocab = np.load(self.vocab_path)
+            emb_init = np.load(self.emb_init_path)
+            inverted_index = self.y.T.tocsr()
+
+            texts = self.raw_data()[0]
+            sparse_x = TfidfVectorizer(vocabulary=vocab).fit_transform(texts)
+            dense_x = sparse_x @ emb_init
+
+            labels_f = np.stack(
+                [dense_x[d.indices].mean(axis=0) for d in inverted_index]
+            )
+            np.save(self.labels_f_path, labels_f)
+
+            return labels_f
 
     def raw_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """Retrun raw data for preprocessing"""

@@ -2,9 +2,15 @@
 Created on 2021/01/07
 @author Sangwoo Han
 """
+import os
+import random
+import time
 from collections import deque
+from datetime import timedelta
+from functools import wraps
 from typing import Dict, Optional, Union
 
+import logzero
 import numpy as np
 import torch
 import torch.nn as nn
@@ -108,7 +114,8 @@ def get_label_embeddings(
     label_encoder: nn.Module,
     batch_size: int = 128,
     device: torch.device = torch.device("cpu"),
-) -> np.ndarray:
+    return_pt: bool = False,
+) -> Union[np.ndarray, torch.Tensor]:
     label_embeddings = []
     label_encoder.eval()
 
@@ -128,30 +135,40 @@ def get_label_embeddings(
             )
         label_ids = label_ids[batch_size:]
 
-    return np.concatenate(label_embeddings)
+    label_embeddings = np.concatenate(label_embeddings)
+
+    if return_pt:
+        label_embeddings = torch.from_numpy(label_embeddings)
+
+    return label_embeddings
 
 
 def get_embeddings(
     model: nn.Module,
     dataloader: DataLoader,
     device: torch.device = torch.device("cpu"),
+    return_pt: bool = False,
     **tqdm_opt,
-) -> np.ndarray:
+) -> Union[np.ndarray, torch.Tensor]:
     model.eval()
 
     idx = []
-    embedding = []
+    embeddings = []
 
     for doc_ids, batch_x, _ in tqdm(dataloader, **tqdm_opt):
         idx.append(doc_ids.numpy())
         with torch.no_grad():
-            embedding.append(
+            embeddings.append(
                 model(to_device(batch_x, device), mp_enabled=False)[0].cpu().numpy()
             )
     idx = np.concatenate(idx)
-    embedding = np.concatenate(embedding)
+    embeddings = np.concatenate(embeddings)
+    embeddings = embeddings[np.argsort(idx)]
 
-    return embedding[np.argsort(idx)]
+    if return_pt:
+        embeddings = torch.from_numpy(embeddings)
+
+    return embeddings
 
 
 def to_device(
@@ -162,4 +179,50 @@ def to_device(
         {k: v.to(device) for k, v in inputs.items()}
         if type(inputs) == dict
         else inputs.to(device)
+    )
+
+
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    torch.backends.cudnn.deterministic = True
+
+
+def set_logger(log_path: str):
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    logzero.logfile(log_path)
+
+
+def log_elapsed_time(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        ret = func(*args, **kwargs)
+        end = time.time()
+
+        elapsed = end - start
+        logger.info(f"elapsed time: {end - start:.2f}s, {timedelta(seconds=elapsed)}")
+
+        return ret
+
+    return wrapper
+
+
+def save_embeddings(
+    train_dataloader: DataLoader,
+    tetst_dataloader: DataLoader,
+    model: nn.Module,
+    label_encoder: nn.Module,
+    filepath: str,
+    device: torch.device = torch.device("cpu"),
+) -> None:
+
+    train_embeddings = get_embeddings(model, train_dataloader, device)
+    test_embeddings = get_embeddings(model, tetst_dataloader, device)
+    label_embeddings = get_label_embeddings(label_encoder, device=device)
+
+    np.savez(
+        filepath, train=train_embeddings, test=test_embeddings, label=label_embeddings
     )

@@ -243,6 +243,8 @@ class AttentionRNN2(nn.Module):
         linear_size: List[int],
         mp_enabled: bool = False,
     ) -> Tuple[torch.Tensor]:
+        super().__init__()
+
         self.attn = MLAttention(num_labels, hidden_size)
         self.linear = MLLinear([hidden_size] + linear_size, 1)
         self.mp_enabled = mp_enabled
@@ -1330,7 +1332,7 @@ class LabelEncoder(nn.Module):
         linear_size: Optional[List[int]] = None,
         output_size: Optional[int] = None,
         emb_size: Optional[int] = None,
-        emb_init: Union[np.ndarray, str] = None,
+        emb_init: Optional[Union[np.ndarray, str]] = None,
         emb_trainable: bool = True,
         dropout: bool = 0.2,
         mp_enabled: bool = False,
@@ -1381,10 +1383,12 @@ class LabelGINEncoder(nn.Module):
         gin_aggregate_type: str = "sum",
         fanouts: List[int] = [4, 3, 2],
         mp_enabled: bool = False,
+        use_stack: bool = True,
     ):
         super().__init__()
         self.graph = graph
         self.mp_enabled = mp_enabled
+        self.use_stack = use_stack
 
         self.sampler = MultiLayerNeighborSampler(fanouts)
 
@@ -1398,7 +1402,10 @@ class LabelGINEncoder(nn.Module):
             fanouts
         ), "# of GIN layers and # of fanouts must be same."
 
-        self.attention = MLAttention2(1, output_size)
+        if use_stack:
+            self.attention = MLAttention2(1, output_size)
+        else:
+            self.attention = self.register_parameter("attention", None)
 
         self.conv_list = nn.ModuleList(
             GINConv(nn.Linear(in_s, out_s), gin_aggregate_type, learn_eps=True)
@@ -1424,9 +1431,12 @@ class LabelGINEncoder(nn.Module):
         hidden_list = []
 
         inputs = inputs.cpu()
-        input_ids, counts = torch.unique_consecutive(
-            inputs[inputs.argsort()], return_counts=True
-        )
+        if self.use_stack:
+            input_ids, counts = torch.unique_consecutive(
+                inputs[inputs.argsort()], return_counts=True
+            )
+        else:
+            input_ids = inputs
 
         blocks = self.sampler.sample_blocks(self.graph, input_ids)
 
@@ -1440,13 +1450,17 @@ class LabelGINEncoder(nn.Module):
                 h = residual(h)
                 hidden_list.append(h)
 
-            stacked_hidden = stack_embed(
-                blocks, blocks[-1].dstdata["_ID"], hidden_list
-            )  # N x num_layer x hidden_size
+            if self.use_stack:
+                stacked_hidden = stack_embed(
+                    blocks, blocks[-1].dstdata["_ID"], hidden_list
+                )  # N x num_layer x hidden_size
 
-            outputs = self.attention(stacked_hidden).squeeze()
+                outputs = self.attention(stacked_hidden).squeeze()
+                outputs[np.repeat(np.arange(counts.shape[0]), counts)][inputs.argsort()]
+            else:
+                outputs = hidden_list[-1]
 
-        return outputs[np.repeat(np.arange(counts.shape[0]), counts)][inputs.argsort()]
+        return outputs
 
 
 class SBert(nn.Module):

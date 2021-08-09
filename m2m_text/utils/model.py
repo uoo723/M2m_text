@@ -2,14 +2,15 @@
 Created on 2021/01/07
 @author Sangwoo Han
 """
+import os
 import random
-from typing import Dict, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.cuda.amp import GradScaler
-from torch.optim import Optimizer, optimizer
+from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
 TModel = Union[nn.DataParallel, nn.Module]
@@ -104,6 +105,81 @@ def load_checkpoint(
 
     else:
         ret = ckpt["epoch"]
+
+    return ret
+
+
+def save_checkpoint2(
+    ckpt_path: str,
+    epoch: int,
+    models: Iterable[TModel],
+    optim: Optional[Optimizer] = None,
+    scaler: Optional[GradScaler] = None,
+    scheduler: Optional[_LRScheduler] = None,
+    results: Optional[Dict[str, float]] = None,
+    other_states: Dict[str, Any] = {},
+) -> None:
+
+    states = {
+        "models": [],
+        "epoch": epoch,
+        "rng_states": (torch.get_rng_state(), np.random.get_state(), random.getstate()),
+        "other_states": other_states,
+        "results": results,
+    }
+
+    for model in models:
+        if isinstance(model, nn.DataParallel):
+            model = model.module
+        states["models"].append(model.state_dict())
+
+    if optim is not None:
+        states["optim"] = optim.state_dict()
+
+    if scaler is not None:
+        states["scaler"] = scaler.state_dict()
+
+    if scheduler is not None:
+        states["scheduler"] = scheduler.state_dict()
+
+    torch.save(states, ckpt_path)
+
+
+def load_checkpoint2(
+    ckpt_path: str,
+    models: Iterable[TModel],
+    optim: Optional[Optimizer] = None,
+    scaler: Optional[GradScaler] = None,
+    scheduler: Optional[_LRScheduler] = None,
+    set_rng_state: bool = True,
+    return_other_states: bool = False,
+) -> Union[int, Tuple[int, Dict[str, Any]]]:
+
+    states = torch.load(ckpt_path)
+
+    for i, model in enumerate(models):
+        if isinstance(model, nn.DataParallel):
+            model = model.module
+        model.load_state_dict(states["models"][i])
+
+    if "optim" in states and optim is not None:
+        optim.load_state_dict(states["optim"])
+
+    if "scaler" in states and scaler is not None:
+        scaler.load_state_dict(states["scaler"])
+
+    if "scheduler" in states and scheduler is not None:
+        scheduler.load_state_dict(states["scheduler"])
+
+    if set_rng_state:
+        torch.set_rng_state(states["rng_state"][0])
+        np.random.set_state(states["rng_state"][1])
+        random.setstate(states["rng_state"][2])
+
+    if return_other_states:
+        ret = (states["epoch"], states["other_states"])
+    else:
+        ret = states["epoch"]
 
     return ret
 

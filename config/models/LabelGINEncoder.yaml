@@ -1,0 +1,10 @@
+name: LabelGINEncoder
+
+model:
+  emb_size: 300
+  hidden_size: [300, 300]
+  output_size: 300
+  use_stack: false
+  # gin_aggregate_type: mean
+  fanouts: [4, 3, 2]
+  emb_trainable: true
