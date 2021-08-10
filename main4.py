@@ -978,7 +978,10 @@ def main(
                 ann_index,
                 pos_num_labels,
                 neg_num_labels,
-                weight_pos_sampling=weight_pos_sampling,
+                ann_candidates,
+                hard_neg_candidates,
+                label_pos_neg_num,
+                weight_pos_sampling,
             ),
             pin_memory=False if no_cuda else True,
         )
