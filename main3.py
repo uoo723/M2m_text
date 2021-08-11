@@ -9,7 +9,7 @@ import shutil
 import warnings
 from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple, Union
 
 import click
 import numpy as np
@@ -98,7 +98,15 @@ class Collector:
         cluster_y: csr_matrix,
     ) -> None:
         self.dataset = dataset
-        self.cluster_y = cluster_y[dataset.dataset.indices]
+        self._cluster_y = cluster_y[dataset.dataset.indices]
+
+    @property
+    def cluster_y(self) -> csr_matrix:
+        return self._cluster_y
+
+    @cluster_y.setter
+    def cluster_y(self, value: csr_matrix) -> None:
+        self._cluster_y = value[self.dataset.dataset.indices]
 
     def __call__(
         self, batch: Iterable[Tuple[torch.Tensor, ...]]
@@ -107,7 +115,7 @@ class Collector:
         batch_x = torch.stack([b[1] for b in batch])
         batch_y = torch.stack([b[2] for b in batch])
         batch_cluster_y = torch.from_numpy(
-            self.cluster_y[input_ids].toarray().squeeze()
+            self._cluster_y[input_ids].toarray().squeeze()
         ).float()
 
         return input_ids, batch_x, batch_y, batch_cluster_y
@@ -334,6 +342,74 @@ def get_model(
     return base_encoder, matcher, encoder, label_encoder
 
 
+def get_cluster_data(
+    cluster: np.ndarray, num_labels: int, datasets: Iterable[TextDataset]
+) -> Tuple[
+    Iterable[csr_matrix],
+    Iterable[np.ndarray],
+    MultiLabelBinarizer,
+    csr_matrix,
+    csr_matrix,
+]:
+    num_clusters = len(cluster)
+
+    label_to_cluster = lil_matrix((num_labels, num_clusters), dtype=np.int64)
+    for i, label_ids in enumerate(cluster):
+        label_to_cluster[label_ids, i] = 1
+    label_to_cluster = label_to_cluster.tocsr()
+    cluster_to_label = label_to_cluster.T.tocsr()
+
+    cluster_y_list = []
+    raw_cluster_y_list = []
+
+    for dataset in datasets:
+        cluster_y = dataset.y @ label_to_cluster
+        cluster_y.data[:] = 1
+        cluster_y_list.append(cluster_y)
+
+        raw_cluster_y = np.array([y.indices for y in cluster_y], dtype=np.object)
+        raw_cluster_y_list.append(raw_cluster_y)
+
+    cluster_mlb = MultiLabelBinarizer(
+        classes=np.arange(num_clusters), sparse_output=True
+    ).fit(raw_cluster_y_list[0])
+
+    return (
+        cluster_y_list,
+        raw_cluster_y_list,
+        cluster_mlb,
+        label_to_cluster,
+        cluster_to_label,
+    )
+
+
+def build_cluster(
+    labels_f: Union[csr_matrix, np.ndarray],
+    cluster_path: str,
+    cluster_level: int,
+    num_labels: int,
+    datasets: Iterable[TextDataset],
+    verbose: bool = True,
+    force: bool = False,
+) -> Tuple[
+    np.ndarray,
+    Iterable[csr_matrix],
+    Iterable[np.ndarray],
+    MultiLabelBinarizer,
+    csr_matrix,
+    csr_matrix,
+]:
+    if os.path.exists(cluster_path) and not force:
+        cluster = np.load(cluster_path, allow_pickle=True)
+    else:
+        cluster = get_clusters(labels_f, levels=[cluster_level], verbose=verbose)[0]
+        np.save(cluster_path, cluster)
+
+    ret = get_cluster_data(cluster, num_labels, datasets)
+
+    return (cluster, *ret)
+
+
 def train_step(
     base_encoder: nn.Module,
     matcher: nn.Module,
@@ -356,6 +432,7 @@ def train_step(
     optim: Optional[Optimizer] = None,
     gradient_clip_value: Optional[float] = None,
     gradient_norm_queue: Optional[deque] = None,
+    inv_w: Optional[torch.Tensor] = None,
     device: torch.device = torch.device("cpu"),
 ) -> float:
     base_encoder.train()
@@ -385,11 +462,13 @@ def train_step(
                 weight_pos_sampling=weight_pos_sampling,
             )
 
+            pos_inv_w = inv_w[pos_labels].to(device) if inv_w is not None else None
+
             pos_label_outputs = label_encoder(to_device(pos_labels, device))
             neg_label_outputs = label_encoder(to_device(neg_labels, device))
 
             metric_loss = metric_criterion(
-                enc_outputs, pos_label_outputs, neg_label_outputs
+                enc_outputs, pos_label_outputs, neg_label_outputs, pos_inv_w
             )
         else:
             metric_loss = torch.tensor(0.0)
@@ -515,7 +594,7 @@ def get_results(
                 top_b,
                 top_k,
             )
-            for batch in tqdm(dataloader)
+            for batch in tqdm(dataloader, leave=False)
         ]
     )
     clusters = np.concatenate(clusters)
@@ -773,11 +852,23 @@ def get_optimizer(
     default=False,
     help="Enable weighted postive sampling",
 )
+@click.option(
+    "--enable-loss-pos-weights",
+    is_flag=True,
+    default=False,
+    help="Enable pos weights based on inv_w",
+)
 @click.option("--cluster-level", type=click.INT, default=10, help="Cluster level")
 @click.option("--top-b", type=click.INT, default=10, help="Top b clusters")
 @click.option("--top-k", type=click.INT, default=10, help="Top k labels")
 @click.option(
     "--matcher-warmup", type=click.INT, default=2000, help="matcher warmup steps"
+)
+@click.option(
+    "--building-cluster-step",
+    type=click.INT,
+    default=0,
+    help="Step for building new cluster",
 )
 @log_elapsed_time
 def main(
@@ -820,10 +911,12 @@ def main(
     metric: str,
     label_pos_neg_num: Tuple[int, int],
     weight_pos_sampling: bool,
+    enable_loss_pos_weights: bool,
     cluster_level: int,
     top_b: int,
     top_k: int,
     matcher_warmup: int,
+    building_cluster_step: int,
 ):
     ################################ Assert options ##################################
     if loss_name != "circle3":
@@ -855,6 +948,9 @@ def main(
     last_ckpt_path = os.path.join(ckpt_root_path, "ckpt.last.pt")
     log_filename = "train.log"
     cluster_path = os.path.join(ckpt_root_path, f"cluster_{cluster_level}.npy")
+    best_cluster_path = os.path.join(
+        ckpt_root_path, f"best_cluster_{cluster_level}.npy"
+    )
 
     os.makedirs(ckpt_root_path, exist_ok=True)
 
@@ -931,40 +1027,22 @@ def main(
 
     #################################### Clustering ##################################
     logger.info("Initialize Cluster")
+    sparse_x = train_dataset.get_sparse_features()
+    sparse_y = train_dataset.y
+    labels_f = normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x))
 
-    if os.path.exists(cluster_path):
-        cluster = np.load(cluster_path, allow_pickle=True)
-    else:
-        sparse_x = train_dataset.get_sparse_features()
-        sparse_y = train_dataset.y
-        labels_f = normalize(csr_matrix(sparse_y.T) @ csc_matrix(sparse_x))
-
-        cluster = get_clusters(labels_f, levels=[cluster_level], verbose=True)[0]
-        np.save(cluster_path, cluster)
+    (
+        cluster,
+        (train_cluster_y, test_cluster_y),
+        (train_raw_cluster_y, test_raw_cluster_y),
+        cluster_mlb,
+        label_to_cluster,
+        cluster_to_label,
+    ) = build_cluster(
+        labels_f, cluster_path, cluster_level, num_labels, [train_dataset, test_dataset]
+    )
 
     num_clusters = len(cluster)
-
-    label_to_cluster = lil_matrix((num_labels, num_clusters), dtype=np.int64)
-    for i, label_ids in enumerate(cluster):
-        label_to_cluster[label_ids, i] = 1
-    label_to_cluster = label_to_cluster.tocsr()
-    cluster_to_label = label_to_cluster.T.tocsr()
-
-    train_cluster_y = train_dataset.y @ label_to_cluster
-    train_cluster_y.data[:] = 1
-
-    test_cluster_y = test_dataset.y @ label_to_cluster
-    test_cluster_y.data[:] = 1
-
-    train_raw_cluster_y = np.array(
-        [y.indices for y in train_cluster_y], dtype=np.object
-    )
-    test_raw_cluster_y = np.array([y.indices for y in test_cluster_y], dtype=np.object)
-
-    cluster_mlb = MultiLabelBinarizer(
-        classes=np.arange(num_clusters), sparse_output=True
-    ).fit(train_raw_cluster_y)
-
     avg_num_of_labels_per_sample = train_dataset.y.sum(axis=-1).mean()
     avg_num_of_custers = train_cluster_y.sum(axis=-1).mean()
     avg_num_of_labels_per_cluster = label_to_cluster.sum(axis=0).mean()
@@ -1045,6 +1123,8 @@ def main(
 
     train_losses = deque(maxlen=print_step)
 
+    global_matcher_warmup = matcher_warmup
+
     if resume and mode == "train":
         resume_ckpt_path = (
             last_ckpt_path if os.path.exists(last_ckpt_path) else ckpt_path
@@ -1064,6 +1144,7 @@ def main(
             start_epoch += 1
             epoch = start_epoch
             global_step = ckpt["global_step"]
+            global_matcher_warmup = ckpt["global_matcher_warmup"]
             gradient_norm_queue = ckpt["gradient_norm_queue"]
             base_enc_swa_state = ckpt["base_enc_swa_state"]
             matcher_swa_state = ckpt["matcher_swa_state"]
@@ -1132,32 +1213,30 @@ def main(
             Subset(test_dataset, np.arange(len(test_dataset)))
         )
 
+        train_collector = Collector(train_subset_dataset, train_cluster_y)
+        valid_collector = Collector(valid_subset_dataset, train_cluster_y)
+        test_collector = Collector(test_subset_dataset, test_cluster_y)
+
         train_dataloader = DataLoader(
             train_subset_dataset,
             batch_size=train_batch_size,
             shuffle=True,
             num_workers=num_workers,
-            collate_fn=Collector(
-                train_subset_dataset,
-                train_cluster_y,
-            ),
+            collate_fn=train_collector,
             pin_memory=False if no_cuda else True,
         )
         valid_dataloader = DataLoader(
             valid_subset_dataset,
             batch_size=test_batch_size,
             num_workers=num_workers,
-            collate_fn=Collector(
-                valid_subset_dataset,
-                train_cluster_y,
-            ),
+            collate_fn=valid_collector,
             pin_memory=False if no_cuda else True,
         )
         test_dataloader = DataLoader(
             test_subset_dataset,
             batch_size=test_batch_size,
             num_workers=num_workers,
-            collate_fn=Collector(test_subset_dataset, test_cluster_y),
+            collate_fn=test_collector,
             pin_memory=False if no_cuda else True,
         )
     ##################################################################################
@@ -1196,8 +1275,32 @@ def main(
                     batch_y,
                     batch_cluster_y,
                 ) in enumerate(train_dataloader, 1):
-                    if global_step == matcher_warmup:
+                    if global_step == global_matcher_warmup:
                         logger.info("Train Encoder")
+
+                    if global_step != 0 and global_step % building_cluster_step == 0:
+                        labels_f = get_label_embeddings(label_encoder, device=device)
+                        (
+                            cluster,
+                            (train_cluster_y, test_cluster_y),
+                            (train_raw_cluster_y, test_raw_cluster_y),
+                            cluster_mlb,
+                            label_to_cluster,
+                            cluster_to_label,
+                        ) = build_cluster(
+                            labels_f,
+                            cluster_path,
+                            cluster_level,
+                            num_labels,
+                            [train_dataset, test_dataset],
+                            force=True,
+                        )
+
+                        train_collector.cluster_y = train_cluster_y
+                        valid_collector.cluster_y = train_cluster_y
+                        test_collector.cluster_y = test_cluster_y
+
+                        global_matcher_warmup = global_step + matcher_warmup
 
                     train_loss = train_step(
                         base_encoder,
@@ -1216,11 +1319,12 @@ def main(
                         neg_num_labels,
                         pool,
                         weight_pos_sampling,
-                        global_step >= matcher_warmup,
+                        global_step >= global_matcher_warmup,
                         scaler,
                         optimizer,
                         gradient_clip_value=gradient_max_norm,
                         gradient_norm_queue=gradient_norm_queue,
+                        inv_w=inv_w_tensor if enable_loss_pos_weights else None,
                         device=device,
                     )
 
@@ -1264,7 +1368,7 @@ def main(
 
                         val_log_msg = f"\nc_p@5: {results['c_p5']:.5f} c_n@5: {results['c_n5']:.5f}"
 
-                        if global_step >= matcher_warmup:
+                        if global_step >= global_matcher_warmup:
                             val_log_msg += (
                                 f"\np@5: {results['p5']:.5f} n@5: {results['n5']:.5f} "
                             )
@@ -1272,8 +1376,8 @@ def main(
                             if "psp5" in results:
                                 val_log_msg += f"psp@5: {results['psp5']:.5f}"
 
-                        if best < results[early_criterion]:
-                            if global_step >= matcher_warmup:
+                        if global_step >= global_matcher_warmup:
+                            if best < results[early_criterion]:
                                 best = results[early_criterion]
                                 e = 0
                                 save_checkpoint2(
@@ -1293,13 +1397,15 @@ def main(
                                         "enc_swa_state": enc_swa_state,
                                         "le_swa_state": le_swa_state,
                                         "global_step": global_step,
+                                        "global_matcher_warmup": global_matcher_warmup,
                                         "early_criterion": early_criterion,
                                         "gradient_norm_queue": gradient_norm_queue,
                                         "e": e,
                                     },
                                 )
-                        else:
-                            e += 1
+                                shutil.copyfile(cluster_path, best_cluster_path)
+                            else:
+                                e += 1
 
                         swa_step(base_encoder, base_enc_swa_state)
                         swa_step(matcher, matcher_swa_state)
@@ -1346,6 +1452,7 @@ def main(
                 "enc_swa_state": enc_swa_state,
                 "le_swa_state": le_swa_state,
                 "global_step": global_step,
+                "global_matcher_warmup": global_matcher_warmup,
                 "early_criterion": early_criterion,
                 "gradient_norm_queue": gradient_norm_queue,
                 "e": e,
@@ -1357,6 +1464,20 @@ def main(
     logger.info("Evaluation.")
     load_checkpoint2(
         ckpt_path, [base_encoder, matcher, encoder, label_encoder], set_rng_state=False
+    )
+
+    cluster = np.load(best_cluster_path, allow_pickle=True)
+
+    (
+        (train_cluster_y, test_cluster_y),
+        (train_raw_cluster_y, test_raw_cluster_y),
+        cluster_mlb,
+        label_to_cluster,
+        cluster_to_label,
+    ) = get_cluster_data(
+        cluster,
+        num_labels,
+        [train_dataset, test_dataset],
     )
 
     results = get_results(
