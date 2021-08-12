@@ -28,13 +28,15 @@ args=(
     # --le-lr 1e-5
     --train-batch-size 128
     --test-batch-size 256
-    --ckpt-name cluster_dynamic_cluster_top_b_5
+    --ckpt-name cluster_dynamic_cluster_v2_fr
     # --ckpt-name euclidean
     --early-criterion 'n5'
     --seed $1
     --swa-warmup 600
     --eval-step 150
     --early 20
+    --matcher-early 5
+    --building-cluster-early 5
     --pos-num-labels 5
     --neg-num-labels 5
     --mp-enabled
@@ -49,8 +51,8 @@ args=(
     --m 0.1
     --top-b 5
     --cluster-level 10
-    --matcher-warmup 1000
-    --building-cluster-step 3000
+    # --matcher-warmup 1000
+    # --building-cluster-step 3000
     # --matcher-warmup 0
 )
 

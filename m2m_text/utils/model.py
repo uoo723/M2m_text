@@ -172,9 +172,9 @@ def load_checkpoint2(
         scheduler.load_state_dict(states["scheduler"])
 
     if set_rng_state:
-        torch.set_rng_state(states["rng_state"][0])
-        np.random.set_state(states["rng_state"][1])
-        random.setstate(states["rng_state"][2])
+        torch.set_rng_state(states["rng_states"][0])
+        np.random.set_state(states["rng_states"][1])
+        random.setstate(states["rng_states"][2])
 
     if return_other_states:
         ret = (states["epoch"], states["other_states"])
@@ -220,3 +220,8 @@ def get_model_outputs(
         outputs = model(model_inputs, **input_opts)
 
     return outputs
+
+
+def freeze_model(model: TModel, freeze: bool = True) -> None:
+    for param in model.parameters():
+        param.requires_grad_(not freeze)

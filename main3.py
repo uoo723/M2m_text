@@ -62,7 +62,7 @@ from m2m_text.networks import (
 )
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
-from m2m_text.utils.model import load_checkpoint2, save_checkpoint2
+from m2m_text.utils.model import freeze_model, load_checkpoint2, save_checkpoint2
 from m2m_text.utils.train import (
     clip_gradient,
     get_embeddings,
@@ -768,6 +768,18 @@ def get_optimizer(
     help="Early stopping criterion",
 )
 @click.option(
+    "--matcher-early",
+    type=click.INT,
+    default=5,
+    help="Early stop patient count for matcher",
+)
+@click.option(
+    "--matcher-early-criterion",
+    type=click.Choice(["c_p5", "c_n5"]),
+    default="c_n5",
+    help="Early stopping criterion for matcher",
+)
+@click.option(
     "--num-epochs", type=click.INT, default=200, help="Total number of epochs"
 )
 @click.option(
@@ -865,10 +877,10 @@ def get_optimizer(
     "--matcher-warmup", type=click.INT, default=2000, help="matcher warmup steps"
 )
 @click.option(
-    "--building-cluster-step",
+    "--building-cluster-early",
     type=click.INT,
-    default=0,
-    help="Step for building new cluster",
+    default=5,
+    help="Build new cluster when metric is not improved",
 )
 @log_elapsed_time
 def main(
@@ -887,6 +899,8 @@ def main(
     print_step: int,
     early: int,
     early_criterion: str,
+    matcher_early: int,
+    matcher_early_criterion: str,
     num_epochs: int,
     train_batch_size: int,
     test_batch_size: int,
@@ -916,7 +930,7 @@ def main(
     top_b: int,
     top_k: int,
     matcher_warmup: int,
-    building_cluster_step: int,
+    building_cluster_early: int,
 ):
     ################################ Assert options ##################################
     if loss_name != "circle3":
@@ -924,6 +938,8 @@ def main(
 
     if label_pos_neg_num[0] > 0:
         assert label_pos_neg_num[1] + label_pos_neg_num[2] > 0
+
+    assert building_cluster_early < early
     ##################################################################################
 
     ################################ Initialize Config ###############################
@@ -1119,11 +1135,15 @@ def main(
     start_epoch = 0
     global_step = 0
     best, e = 0, 0
+    matcher_best, matcher_e = 0, 0
+    building_cluster_e = 0
     early_stop = False
+
+    train_encoder = False
 
     train_losses = deque(maxlen=print_step)
 
-    global_matcher_warmup = matcher_warmup
+    # global_matcher_warmup = matcher_warmup
 
     if resume and mode == "train":
         resume_ckpt_path = (
@@ -1144,7 +1164,7 @@ def main(
             start_epoch += 1
             epoch = start_epoch
             global_step = ckpt["global_step"]
-            global_matcher_warmup = ckpt["global_matcher_warmup"]
+            # global_matcher_warmup = ckpt["global_matcher_warmup"]
             gradient_norm_queue = ckpt["gradient_norm_queue"]
             base_enc_swa_state = ckpt["base_enc_swa_state"]
             matcher_swa_state = ckpt["matcher_swa_state"]
@@ -1152,6 +1172,10 @@ def main(
             le_swa_state = ckpt["le_swa_state"]
             best = ckpt["best"]
             e = ckpt["e"]
+            matcher_e = ckpt["matcher_e"]
+            matcher_best = ckpt["matcher_best"]
+            train_encoder = ckpt["train_encoder"]
+            building_cluster_e = ckpt["building_cluster_e"]
 
         else:
             logger.warning("No checkpoint")
@@ -1263,6 +1287,8 @@ def main(
     # )
     pool = None
 
+    start_train_encoder = False
+
     if mode == "train":
         try:
             for epoch in range(start_epoch, num_epochs):
@@ -1275,10 +1301,11 @@ def main(
                     batch_y,
                     batch_cluster_y,
                 ) in enumerate(train_dataloader, 1):
-                    if global_step == global_matcher_warmup:
+                    if start_train_encoder:
                         logger.info("Train Encoder")
+                        start_train_encoder = False
 
-                    if global_step != 0 and global_step % building_cluster_step == 0:
+                    if train_encoder and building_cluster_e >= building_cluster_early:
                         labels_f = get_label_embeddings(label_encoder, device=device)
                         (
                             cluster,
@@ -1300,7 +1327,12 @@ def main(
                         valid_collector.cluster_y = train_cluster_y
                         test_collector.cluster_y = test_cluster_y
 
-                        global_matcher_warmup = global_step + matcher_warmup
+                        # global_matcher_warmup = global_step + matcher_warmup
+                        train_encoder = False
+                        building_cluster_e = 0
+                        matcher_e = 0
+                        matcher_best = 0
+                        freeze_model(base_encoder)
 
                     train_loss = train_step(
                         base_encoder,
@@ -1319,7 +1351,7 @@ def main(
                         neg_num_labels,
                         pool,
                         weight_pos_sampling,
-                        global_step >= global_matcher_warmup,
+                        train_encoder,
                         scaler,
                         optimizer,
                         gradient_clip_value=gradient_max_norm,
@@ -1368,7 +1400,7 @@ def main(
 
                         val_log_msg = f"\nc_p@5: {results['c_p5']:.5f} c_n@5: {results['c_n5']:.5f}"
 
-                        if global_step >= global_matcher_warmup:
+                        if train_encoder:
                             val_log_msg += (
                                 f"\np@5: {results['p5']:.5f} n@5: {results['n5']:.5f} "
                             )
@@ -1376,10 +1408,11 @@ def main(
                             if "psp5" in results:
                                 val_log_msg += f"psp@5: {results['psp5']:.5f}"
 
-                        if global_step >= global_matcher_warmup:
                             if best < results[early_criterion]:
                                 best = results[early_criterion]
                                 e = 0
+                                building_cluster_e = 0
+
                                 save_checkpoint2(
                                     ckpt_path,
                                     epoch,
@@ -1397,15 +1430,32 @@ def main(
                                         "enc_swa_state": enc_swa_state,
                                         "le_swa_state": le_swa_state,
                                         "global_step": global_step,
-                                        "global_matcher_warmup": global_matcher_warmup,
+                                        # "global_matcher_warmup": global_matcher_warmup,
                                         "early_criterion": early_criterion,
                                         "gradient_norm_queue": gradient_norm_queue,
                                         "e": e,
+                                        "matcher_e": matcher_e,
+                                        "matcher_best": matcher_best,
+                                        "train_encoder": train_encoder,
+                                        "building_cluster_e": building_cluster_e,
                                     },
                                 )
                                 shutil.copyfile(cluster_path, best_cluster_path)
                             else:
                                 e += 1
+                                building_cluster_e += 1
+
+                        else:
+                            if matcher_best < results[matcher_early_criterion]:
+                                matcher_best = results[matcher_early_criterion]
+                                matcher_e = 0
+                            else:
+                                matcher_e += 1
+
+                            if matcher_e >= matcher_early:
+                                train_encoder = True
+                                start_train_encoder = True
+                                freeze_model(base_encoder, False)
 
                         swa_step(base_encoder, base_enc_swa_state)
                         swa_step(matcher, matcher_swa_state)
@@ -1417,12 +1467,15 @@ def main(
                         swap_swa_params(label_encoder, le_swa_state)
 
                     if (
-                        global_step % print_step == 0
-                        or global_step % eval_step == 0
-                        or (epoch == num_epochs - 1 and i == len(train_dataloader))
+                        global_step % print_step == 0  # print step
+                        or global_step % eval_step == 0  # eval step
+                        or (
+                            epoch == num_epochs - 1 and i == len(train_dataloader)
+                        )  # last step
                     ):
                         log_msg = f"{epoch} {i * train_dataloader.batch_size} "
-                        log_msg += f"early stop: {e} "
+                        log_msg += f"early stop: {e}/{early} "
+                        log_msg += f"matcher warmup: {matcher_e}/{matcher_early} "
                         log_msg += f"train loss: {np.mean(train_losses):.5f} "
                         log_msg += val_log_msg
 
@@ -1452,33 +1505,41 @@ def main(
                 "enc_swa_state": enc_swa_state,
                 "le_swa_state": le_swa_state,
                 "global_step": global_step,
-                "global_matcher_warmup": global_matcher_warmup,
+                # "global_matcher_warmup": global_matcher_warmup,
                 "early_criterion": early_criterion,
                 "gradient_norm_queue": gradient_norm_queue,
                 "e": e,
+                "matcher_e": matcher_e,
+                "matcher_best": matcher_best,
+                "train_encoder": train_encoder,
+                "building_cluster_e": building_cluster_e,
             },
         )
     ##################################################################################
 
     ################################### Evaluation ###################################
     logger.info("Evaluation.")
-    load_checkpoint2(
-        ckpt_path, [base_encoder, matcher, encoder, label_encoder], set_rng_state=False
-    )
+    if os.path.exists(ckpt_path):
+        load_checkpoint2(
+            ckpt_path,
+            [base_encoder, matcher, encoder, label_encoder],
+            set_rng_state=False,
+        )
 
-    cluster = np.load(best_cluster_path, allow_pickle=True)
+    if os.path.exists(best_cluster_path):
+        cluster = np.load(best_cluster_path, allow_pickle=True)
 
-    (
-        (train_cluster_y, test_cluster_y),
-        (train_raw_cluster_y, test_raw_cluster_y),
-        cluster_mlb,
-        label_to_cluster,
-        cluster_to_label,
-    ) = get_cluster_data(
-        cluster,
-        num_labels,
-        [train_dataset, test_dataset],
-    )
+        (
+            (train_cluster_y, test_cluster_y),
+            (train_raw_cluster_y, test_raw_cluster_y),
+            cluster_mlb,
+            label_to_cluster,
+            cluster_to_label,
+        ) = get_cluster_data(
+            cluster,
+            num_labels,
+            [train_dataset, test_dataset],
+        )
 
     results = get_results(
         base_encoder,
