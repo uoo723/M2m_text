@@ -882,6 +882,12 @@ def get_optimizer(
     default=5,
     help="Build new cluster when metric is not improved",
 )
+@click.option(
+    "--disable-dynamic-cluster",
+    is_flag=True,
+    default=True,
+    help="Disable dynamic cluster",
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -931,6 +937,7 @@ def main(
     top_k: int,
     matcher_warmup: int,
     building_cluster_early: int,
+    disable_dynamic_cluster: bool,
 ):
     ################################ Assert options ##################################
     if loss_name != "circle3":
@@ -1305,7 +1312,11 @@ def main(
                         logger.info("Train Encoder")
                         start_train_encoder = False
 
-                    if train_encoder and building_cluster_e >= building_cluster_early:
+                    if (
+                        not disable_dynamic_cluster
+                        and train_encoder
+                        and building_cluster_e >= building_cluster_early
+                    ):
                         labels_f = get_label_embeddings(label_encoder, device=device)
                         (
                             cluster,
