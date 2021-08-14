@@ -322,7 +322,7 @@ def train_step(
 
     with torch.cuda.amp.autocast(enabled=mp_enabled):
         pos_inv_w = inv_w[batch_pos_labels].to(device) if inv_w is not None else None
-
+        print("batch_pos_labels.size():", batch_pos_labels.size())
         anchor_doc_outputs = model(batch_anchor_doc.to(device))[0]
         pos_label_outputs = label_encoder(batch_pos_labels.to(device))
         neg_label_outputs = label_encoder(batch_neg_labels.to(device))

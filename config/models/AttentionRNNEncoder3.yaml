@@ -1,0 +1,24 @@
+name:
+  base_encoder: RNNEncoder
+  matcher: AttentionRNN2
+  encoder: AttentionRNNEncoder3
+
+base_encoder:
+  emb_size: 300
+  hidden_size: 150
+  num_layers: 1
+  emb_trainable: false
+  dropout: 0.5
+
+matcher:
+  hidden_size: 300  # encoder.hidden_size x 2
+  linear_size: [256]
+
+encoder:
+  hidden_size: 300  # encoder.hidden_size x 2
+  num_heads: 3
+  linear_size: [500, 300]
+  output_linear_size: [500, 300]
+
+aggregator:
+  hidden_size: 300

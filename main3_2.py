@@ -3,6 +3,7 @@ Created on 2021/07/06
 @author Sangwoo Han
 
 Instace Anchor + Dynamic Cluster Assignements
+LNEMLC approaches
 """
 import os
 import shutil
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple, Union
 
 import click
-from networkx.classes.function import freeze
+import dgl
 import numpy as np
 import torch
 import torch.multiprocessing as mp
@@ -57,7 +58,10 @@ from m2m_text.networks import (
     AttentionRNN2,
     AttentionRNNEncoder,
     AttentionRNNEncoder2,
+    AttentionRNNEncoder3,
     LabelEncoder,
+    LabelGINEncoder,
+    Pooling,
     RNNEncoder,
     SBert,
 )
@@ -86,10 +90,22 @@ DATASET_CLS = {
 
 BASE_ENCODER_CLS = {"RNNEncoder": RNNEncoder}
 MATCHER_CLS = {"AttentionRNN2": AttentionRNN2}
-ENCODER_CLS = {"AttentionRNNEncoder2": AttentionRNNEncoder2}
-LE_MODEL_CLS = {"LabelEncoder": LabelEncoder}
+ENCODER_CLS = {
+    "AttentionRNNEncoder2": AttentionRNNEncoder2,
+    "AttentionRNNEncoder3": AttentionRNNEncoder3,
+}
+LE_MODEL_CLS = {"LabelEncoder": LabelEncoder, "LabelGINEncoder": LabelGINEncoder}
 
 TRANSFORMER_MODELS = ["SBert"]
+
+# not supported mixed precision
+NOT_SUPPORTED_MP = {
+    "LabelGINEncoder": LabelGINEncoder,
+}
+
+USE_GRAPH_MODEL = {
+    "LabelGINEncoder": LabelGINEncoder,
+}
 
 
 class Collector:
@@ -315,15 +331,12 @@ def sample_pos_neg(
 
 def get_model(
     model_cnf: dict,
-    le_model_cnf: dict,
     data_cnf: dict,
     num_clusters: int,
-    num_labels: int,
     mp_enabled: bool,
     device: torch.device,
-) -> Tuple[nn.Module, nn.Module, nn.Module, nn.Module]:
+) -> Tuple[nn.Module, nn.Module, nn.Module]:
     model_name = model_cnf["name"]
-    le_model_name = le_model_cnf["name"]
 
     model_cnf["base_encoder"]["emb_init"] = data_cnf["model"]["emb_init"]
 
@@ -336,11 +349,46 @@ def get_model(
     encoder = ENCODER_CLS[model_name["encoder"]](
         mp_enabled=mp_enabled, **model_cnf["encoder"]
     ).to(device)
-    label_encoder = LE_MODEL_CLS[le_model_name](
-        num_labels=num_labels, mp_enabled=mp_enabled, **le_model_cnf["model"]
+
+    return base_encoder, matcher, encoder
+
+
+def get_label_encoder(
+    model_name: str,
+    le_model_cnf: dict,
+    num_labels: int,
+    dataset: Optional[TextDataset] = None,
+    emb_init: Optional[np.ndarray] = None,
+    mp_enabled: bool = False,
+    device: torch.device = torch.device("cpu"),
+) -> nn.Module:
+    kwargs = {}
+
+    if model_name in NOT_SUPPORTED_MP:
+        mp_enabled = False
+
+    if model_name in USE_GRAPH_MODEL:
+        assert dataset is not None
+        adj = lil_matrix(dataset.y.T @ dataset.y)
+        adj.setdiag(0)
+        adj = adj.tocsr()
+        src, dst = adj.nonzero()
+
+        u = np.concatenate([src, dst])
+        v = np.concatenate([dst, src])
+
+        g = dgl.graph((u, v))
+        kwargs = {"graph": g}
+
+    label_encoder = LE_MODEL_CLS[model_name](
+        emb_init=emb_init,
+        num_labels=num_labels,
+        mp_enabled=mp_enabled,
+        **le_model_cnf["model"],
+        **kwargs,
     ).to(device)
 
-    return base_encoder, matcher, encoder, label_encoder
+    return label_encoder
 
 
 def get_cluster_data(
@@ -411,13 +459,35 @@ def build_cluster(
     return (cluster, *ret)
 
 
+def get_aggregated_label_emb(
+    label_encoder: nn.Module,
+    aggregator: nn.Module,
+    batch_y: torch.Tensor,
+    device: torch.device = torch.device("cpu"),
+) -> torch.Tensor:
+    label_emb = label_encoder(batch_y.nonzero(as_tuple=True)[1].to(device))
+    agg_label_emb = []
+
+    start = 0
+    end = 0
+    for y in batch_y:
+        indices = y.nonzero(as_tuple=True)[0]
+        end = start + len(indices)
+        agg_label_emb.append(aggregator(label_emb[start:end]))
+        start = end
+
+    return torch.cat(agg_label_emb)
+
+
 def train_step(
     base_encoder: nn.Module,
     matcher: nn.Module,
     encoder: nn.Module,
     label_encoder: nn.Module,
+    aggregator: nn.Module,
     cls_criterion: nn.Module,
     metric_criterion: nn.Module,
+    mse_criterion: nn.Module,
     top_b: int,
     cluster_to_label: csr_matrix,
     batch_x: torch.Tensor,
@@ -448,11 +518,11 @@ def train_step(
         cls_loss = cls_criterion(matcher_outputs, to_device(batch_cluster_y, device))
 
         if train_encoder:
-            enc_outputs = encoder(base_outputs, masks)[0]
+            enc_outputs = encoder(base_outputs, masks)
             _, clusters = torch.topk(matcher_outputs, top_b)
             clusters = clusters.cpu()  # N x top_b
             pos_labels, neg_labels = sample_pos_neg(
-                enc_outputs.detach().cpu().float(),
+                enc_outputs[0].detach().cpu().float(),
                 batch_y,
                 clusters,
                 label_embeddings,
@@ -469,12 +539,18 @@ def train_step(
             neg_label_outputs = label_encoder(to_device(neg_labels, device))
 
             metric_loss = metric_criterion(
-                enc_outputs, pos_label_outputs, neg_label_outputs, pos_inv_w
+                enc_outputs[0], pos_label_outputs, neg_label_outputs, pos_inv_w
             )
+
+            agg_label_emb = get_aggregated_label_emb(
+                label_encoder, aggregator, batch_y, device
+            )
+            mse_loss = mse_criterion(enc_outputs[1], agg_label_emb)
         else:
             metric_loss = torch.tensor(0.0)
+            mse_loss = torch.tensor(0.0)
 
-        loss = cls_loss + metric_loss
+        loss = cls_loss + metric_loss + mse_loss
 
     optim.zero_grad()
 
@@ -674,6 +750,7 @@ def get_optimizer(
     matcher: nn.Module,
     encoder: nn.Module,
     label_encoder: nn.Module,
+    aggregator: nn.Module,
     base_enc_lr: float,
     base_enc_decay: float,
     matcher_lr: float,
@@ -684,9 +761,9 @@ def get_optimizer(
     le_decay: float,
 ) -> Optimizer:
     no_decay = ["bias", "LayerNorm.weight"]
-    models = [base_encoder, matcher, encoder, label_encoder]
-    lr_list = [base_enc_lr, matcher_lr, enc_lr, le_lr]
-    decay_list = [base_enc_decay, matcher_decay, enc_decay, le_decay]
+    models = [base_encoder, matcher, encoder, label_encoder, aggregator]
+    lr_list = [base_enc_lr, matcher_lr, enc_lr, le_lr, base_enc_lr]
+    decay_list = [base_enc_decay, matcher_decay, enc_decay, le_decay, base_enc_decay]
 
     param_groups = [
         (
@@ -886,7 +963,7 @@ def get_optimizer(
 @click.option(
     "--disable-dynamic-cluster",
     is_flag=True,
-    default=True,
+    default=False,
     help="Disable dynamic cluster",
 )
 @click.option(
@@ -894,6 +971,18 @@ def get_optimizer(
     is_flag=True,
     default=False,
     help='Freeze base encoder when matcher warmup'
+)
+@click.option(
+    "--agg-type",
+    type=click.Choice(["max", "sum", "mean", "att"]),
+    default="mean",
+    help="Set aggregate function",
+)
+@click.option(
+    "--use-pretrained-label-emb",
+    is_flag=True,
+    default=False,
+    help="Use pretrained label embedding",
 )
 @log_elapsed_time
 def main(
@@ -946,6 +1035,8 @@ def main(
     building_cluster_early: int,
     disable_dynamic_cluster: bool,
     freeze_base_enc: bool,
+    agg_type: str,
+    use_pretrained_label_emb: bool,
 ):
     ################################ Assert options ##################################
     if loss_name != "circle3":
@@ -1093,9 +1184,27 @@ def main(
     logger.info(f"Encoder: {model_name['encoder']}")
     logger.info(f"Label Model: {le_model_name}")
 
-    base_encoder, matcher, encoder, label_encoder = get_model(
-        model_cnf, le_model_cnf, data_cnf, num_clusters, num_labels, mp_enabled, device
+    base_encoder, matcher, encoder = get_model(
+        model_cnf, data_cnf, num_clusters, mp_enabled, device
     )
+
+    if use_pretrained_label_emb:
+        logger.info("Get label features")
+        labels_f = train_dataset.get_label_features()
+    else:
+        labels_f = None
+
+    label_encoder = get_label_encoder(
+        le_model_name,
+        le_model_cnf,
+        num_labels,
+        train_dataset,
+        labels_f,
+        mp_enabled,
+        device,
+    )
+
+    aggregator = Pooling(agg_type, **model_cnf["aggregator"]).to(device)
 
     if num_gpus > 1 and not no_cuda:
         logger.info(f"Multi-GPU mode: {num_gpus} GPUs")
@@ -1115,6 +1224,7 @@ def main(
         matcher,
         encoder,
         label_encoder,
+        aggregator,
         base_enc_lr,
         base_enc_decay,
         matcher_lr,
@@ -1135,6 +1245,7 @@ def main(
     else:
         metric_criterion = CircleLoss3(m=m, gamma=gamma, metric=metric)
 
+    mse_criterion = nn.MSELoss()
     cls_criterion = nn.BCEWithLogitsLoss()
 
     gradient_norm_queue = (
@@ -1359,8 +1470,10 @@ def main(
                         matcher,
                         encoder,
                         label_encoder,
+                        aggregator,
                         cls_criterion,
                         metric_criterion,
+                        mse_criterion,
                         top_b,
                         cluster_to_label,
                         batch_x,
@@ -1401,6 +1514,8 @@ def main(
                         label_embeddings[:] = get_label_embeddings(
                             label_encoder, device=device, return_pt=True
                         )
+
+                        print(label_embeddings)
 
                         results = get_results(
                             base_encoder,

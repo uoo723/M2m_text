@@ -290,6 +290,41 @@ class AttentionRNNEncoder2(nn.Module):
         return (outputs,)
 
 
+class AttentionRNNEncoder3(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        linear_size: List[int],
+        output_linear_size: List[int],
+        mp_enabled: bool = False,
+    ):
+        super().__init__()
+        self.attn = MultiHeadAttention(hidden_size, hidden_size, num_heads)
+        self.linear = MLLinear([hidden_size] + linear_size[:-1], linear_size[-1])
+        self.output_linear = MLLinear(
+            [hidden_size + linear_size[-1]] + output_linear_size[:-1],
+            output_linear_size[-1],
+        )
+        self.mp_enabled = mp_enabled
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        masks: torch.Tensor,
+        mp_enabled: Optional[bool] = None,
+    ) -> Tuple[torch.Tensor]:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            hidden = self.attn(inputs, masks)
+            outputs = self.linear(hidden)
+            outputs2 = self.output_linear(torch.cat([hidden, outputs], dim=-1))
+
+        return (outputs2, outputs)
+
+
 class FCNet(nn.Module):
     """FCNet
 
@@ -1381,9 +1416,11 @@ class LabelGINEncoder(nn.Module):
         emb_trainable: bool = True,
         dropout: bool = 0.2,
         gin_aggregate_type: str = "sum",
+        enable_residual: bool = True,
         fanouts: List[int] = [4, 3, 2],
         mp_enabled: bool = False,
         use_stack: bool = True,
+        version: int = 1,
     ):
         super().__init__()
         self.graph = graph
@@ -1398,28 +1435,59 @@ class LabelGINEncoder(nn.Module):
 
         linear_size = [self.emb.emb.embedding_dim] + hidden_size + [output_size]
 
-        assert len(linear_size) - 1 == len(
-            fanouts
-        ), "# of GIN layers and # of fanouts must be same."
+        if version == 1:
+            assert len(linear_size) - 1 == len(
+                fanouts
+            ), "# of GIN layers and # of fanouts must be same."
 
         if use_stack:
             self.attention = MLAttention2(1, output_size)
         else:
             self.attention = self.register_parameter("attention", None)
 
-        self.conv_list = nn.ModuleList(
-            GINConv(nn.Linear(in_s, out_s), gin_aggregate_type, learn_eps=True)
-            for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
-        )
-
-        self.residual_list = nn.ModuleList(
-            nn.Sequential(
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                Residual(output_size, output_size, dropout),
+        if version == 1:
+            self.conv_list = nn.ModuleList(
+                GINConv(nn.Linear(in_s, out_s), gin_aggregate_type, learn_eps=True)
+                for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
             )
-            for _ in range(len(linear_size) - 1)
-        )
+        else:
+            self.conv_list = nn.ModuleList(
+                GINConv(
+                    MLLinear(linear_size[:-1], linear_size[-1]),
+                    gin_aggregate_type,
+                    learn_eps=True,
+                )
+                for _ in range(len(fanouts))
+            )
+
+        if enable_residual:
+            if version == 1:
+                self.residual_list = nn.ModuleList(
+                    nn.Sequential(
+                        nn.ReLU(),
+                        nn.Dropout(dropout),
+                        Residual(output_size, output_size, dropout),
+                    )
+                    for _ in range(len(linear_size) - 1)
+                )
+            else:
+                self.residual_list = nn.ModuleList(
+                    nn.Sequential(
+                        nn.ReLU(),
+                        nn.Dropout(dropout),
+                        Residual(output_size, output_size, dropout),
+                    )
+                    for _ in range(len(fanouts))
+                )
+        else:
+            if version == 1:
+                self.residual_list = nn.ModuleList(
+                    Identity() for _ in range(len(linear_size) - 1)
+                )
+            else:
+                self.residual_list = nn.ModuleList(
+                    Identity() for _ in range(len(fanouts))
+                )
 
     def forward(
         self, inputs: torch.Tensor, mp_enabled: Optional[bool] = None
@@ -1430,13 +1498,17 @@ class LabelGINEncoder(nn.Module):
         device = inputs.device
         hidden_list = []
 
-        inputs = inputs.cpu()
-        if self.use_stack:
-            input_ids, counts = torch.unique_consecutive(
-                inputs[inputs.argsort()], return_counts=True
-            )
+        if len(inputs.size()) == 2:
+            input_size = inputs.size()
+            inputs = inputs.flatten()
         else:
-            input_ids = inputs
+            input_size = None
+
+        inputs = inputs.cpu()
+
+        input_ids, counts = torch.unique_consecutive(
+            inputs[inputs.argsort()], return_counts=True
+        )
 
         blocks = self.sampler.sample_blocks(self.graph, input_ids)
 
@@ -1456,9 +1528,15 @@ class LabelGINEncoder(nn.Module):
                 )  # N x num_layer x hidden_size
 
                 outputs = self.attention(stacked_hidden).squeeze()
-                outputs[np.repeat(np.arange(counts.shape[0]), counts)][inputs.argsort()]
             else:
                 outputs = hidden_list[-1]
+
+            outputs = outputs[np.repeat(np.arange(counts.shape[0]), counts)][
+                inputs.argsort()
+            ]
+
+            if input_size is not None:
+                outputs = outputs.view(*input_size, -1)
 
         return outputs
 
@@ -1534,3 +1612,40 @@ class SBert(nn.Module):
 
     def encode(self, *args, **kwargs):
         return self.model.encode(*args, **kwargs)
+
+
+class Pooling(nn.Module):
+    def __init__(
+        self,
+        pooling_mode: str = "mean",
+        hidden_size: Optional[int] = None,
+        linear_size: Optional[List[int]] = None,
+    ) -> None:
+        super().__init__()
+        assert pooling_mode in ["max", "sum", "mean", "att"]
+        self.pooling_mode = pooling_mode
+
+        # if pooling_mode == 'max':
+
+        if pooling_mode == "att":
+            assert hidden_size is not None
+            self.attn = MLAttention(1, hidden_size)
+        else:
+            self.attn = self.register_parameter("attn", None)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if self.pooling_mode == "max":
+            outputs = torch.max(inputs, dim=0, keepdim=True)[0]
+        elif self.pooling_mode == "sum":
+            outputs = torch.sum(inputs, dim=0, keepdim=True)
+        elif self.pooling_mode == "mean":
+            outputs = torch.mean(inputs, dim=0, keepdim=True)
+        elif self.pooling_mode == "att":
+            outputs = self.attn(
+                inputs.unsqueeze(0),
+                torch.tensor([[True] * inputs.shape[0]]).to(inputs.device),
+            ).squeeze(1)
+        else:
+            raise AssertionError
+
+        return outputs
