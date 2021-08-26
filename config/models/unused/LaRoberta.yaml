@@ -1,18 +1,18 @@
 name: LaRoberta
 
 model:
-  pretrained: roberta-base
+  model_name: roberta-base
   freeze_encoder: true
-  max_length: 200
   linear_size: [256, 128]
+
+tokenizer:
+  max_length: 200
+  padding: true
+  truncation: longest_first
+  return_tensors: pt
 
 train:
   input_opts:
     return_attn: true
-    return_dict: false
-  gen_input_opts:
+  output_opts:
     pass_attn: true
-    return_dict: false
-  last_input_opts:
-    pass_attn: true
-    return_dict: false

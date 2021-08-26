@@ -99,6 +99,64 @@ def get_precision_results(
     return ret
 
 
+def get_precision_results2(
+    prediction: TPredict,
+    targets: TTarget,
+    inv_w: Optional[np.ndarray] = None,
+    mlb: TMlb = None,
+) -> Dict[str, float]:
+    if mlb is None:
+        mlb = MultiLabelBinarizer(sparse_output=True).fit(targets)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        p1 = get_p_1(prediction, targets, mlb)
+        p3 = get_p_3(prediction, targets, mlb)
+        p5 = get_p_5(prediction, targets, mlb)
+
+        n1 = get_n_1(prediction, targets, mlb)
+        n3 = get_n_3(prediction, targets, mlb)
+        n5 = get_n_5(prediction, targets, mlb)
+
+        r1 = get_r_1(prediction, targets, mlb)
+        r5 = get_r_5(prediction, targets, mlb)
+        r10 = get_r_10(prediction, targets, mlb)
+
+        ret = {
+            "p1": p1,
+            "p3": p3,
+            "p5": p5,
+            "n1": n1,
+            "n3": n3,
+            "n5": n5,
+            "r1": r1,
+            "r5": r5,
+            "r10": r10,
+        }
+
+        if inv_w is not None:
+            psp1 = get_psp_1(prediction, targets, inv_w, mlb)
+            psp3 = get_psp_3(prediction, targets, inv_w, mlb)
+            psp5 = get_psp_5(prediction, targets, inv_w, mlb)
+
+            psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
+            psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
+            psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
+
+            ret = {
+                **ret,
+                "psp1": psp1,
+                "psp3": psp3,
+                "psp5": psp5,
+                "psn1": psn1,
+                "psn3": psn3,
+                "psn5": psn5,
+            }
+
+    return ret
+
+
 def get_precision(
     prediction: TPredict,
     targets: TTarget,

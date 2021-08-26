@@ -7,3 +7,9 @@ model:
   dropout: 0.5
   emb_trainable: false
   emb_size: 300
+
+train:
+  input_opts:
+    return_attn: true
+  output_opts:
+    pass_attn: true

@@ -141,13 +141,18 @@ class MLAttention(nn.Module):
         self.attention = nn.Linear(hidden_size, num_labels, bias=False)
         nn.init.xavier_uniform_(self.attention.weight)
 
-    def forward(self, inputs, masks):
+    def forward(self, inputs, masks, return_attention=False):
         masks = torch.unsqueeze(masks, 1)  # N, 1, L
         attention = (
             self.attention(inputs).transpose(1, 2).masked_fill(~masks, -np.inf)
         )  # N, labels_num, L
         attention = F.softmax(attention, -1)
-        return attention @ inputs  # N, labels_num, hidden_size
+        outputs = attention @ inputs  # N, labels_num, hidden_size
+
+        if return_attention:
+            return (outputs, attention)
+        else:
+            return outputs
 
 
 class MultiHeadAttention(nn.Module):

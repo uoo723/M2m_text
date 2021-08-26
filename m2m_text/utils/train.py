@@ -226,3 +226,10 @@ def save_embeddings(
     np.savez(
         filepath, train=train_embeddings, test=test_embeddings, label=label_embeddings
     )
+
+
+def normalize_inv_w(inv_w: np.ndarray, epsilon: float = 1e-3) -> torch.Tensor:
+    prob = torch.from_numpy(inv_w).float()
+    prob = (prob - prob.min()) / (prob.max() - prob.min())
+    prob = prob * (1 - 2 * epsilon) + epsilon
+    return prob
