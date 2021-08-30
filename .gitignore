@@ -143,6 +143,7 @@ models/*.pt
 temp/
 EURLex/
 img/
+outputs/
 
 # mlflow
 mlruns/

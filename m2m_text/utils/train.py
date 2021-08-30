@@ -229,7 +229,11 @@ def save_embeddings(
 
 
 def normalize_inv_w(inv_w: np.ndarray, epsilon: float = 1e-3) -> torch.Tensor:
+    if len(inv_w.shape) == 0:
+        return torch.tensor([1.0])
+
     prob = torch.from_numpy(inv_w).float()
-    prob = (prob - prob.min()) / (prob.max() - prob.min())
+
+    prob = (prob - prob.min() + epsilon) / (prob.max() - prob.min() + epsilon)
     prob = prob * (1 - 2 * epsilon) + epsilon
     return prob
