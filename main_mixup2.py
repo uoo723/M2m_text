@@ -10,7 +10,7 @@ import shutil
 import warnings
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import click
 import numpy as np
@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 from logzero import logger
 from ruamel.yaml import YAML
+from scipy.sparse import csr_matrix, lil_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
 from torch.cuda.amp import GradScaler
@@ -52,6 +53,7 @@ from m2m_text.utils.mixup import MixUp, mixup
 from m2m_text.utils.model import load_checkpoint2, save_checkpoint2
 from m2m_text.utils.train import (
     clip_gradient,
+    get_avg_ranking,
     log_elapsed_time,
     normalize_inv_w,
     set_logger,
@@ -254,6 +256,8 @@ def train_mixup_step(
     optim: Optimizer,
     mixup_num: int,
     mixup_alpha: float,
+    flow_mixup_enabled: bool,
+    no_label_smoothing: bool,
     input_opts: Dict[str, Any],
     output_opts: Dict[str, Any],
     inv_w: np.ndarray,
@@ -279,12 +283,23 @@ def train_mixup_step(
             y2_label_ids = batch_y[ridx[i]].nonzero(as_tuple=True)[0]
 
             while True:
-                y1_idx = normalize_inv_w(inv_w[y1_label_ids.cpu()]).bernoulli().bool()
+                y1_idx = (
+                    torch.tensor(1 - 1 / inv_w[y1_label_ids.cpu()]).bernoulli().bool()
+                )
+                if len(y1_idx.size()) == 0:
+                    y1_idx = y1_idx.unsqueeze(0)
+
                 if y1_idx.sum() > 0:
                     break
 
             while True:
-                y2_idx = normalize_inv_w(inv_w[y2_label_ids.cpu()]).bernoulli().bool()
+                y2_idx = (
+                    torch.tensor(1 - 1 / inv_w[y2_label_ids.cpu()]).bernoulli().bool()
+                )
+
+                if len(y2_idx.size()) == 0:
+                    y2_idx = y2_idx.unsqueeze(0)
+
                 if y2_idx.sum() > 0:
                     break
 
@@ -300,6 +315,18 @@ def train_mixup_step(
                 torch.ones(y2_idx.sum()).repeat(y1_idx.sum(), 1), n - 1
             )
 
+            # print(
+            #     "mixed_outputs[i, y1_label_ids[y1_idx]].shape:",
+            #     mixed_outputs[i, y1_label_ids[y1_idx]].shape,
+            # )
+            # print(
+            #     " mixed_outputs[ridx[i], y2_label_ids[y2_idx][y2_idx2]].shape",
+            #     mixed_outputs[ridx[i], y2_label_ids[y2_idx][y2_idx2]].shape,
+            # )
+            # print("y1_idx.shape:", y1_idx.shape)
+            # print("y1_idx.sum()", y1_idx.sum())
+            # print("y1_label_Ids:", y1_label_ids)
+            # print()
             mixed = torch.cat(
                 [
                     mixed_outputs[i, y1_label_ids[y1_idx]].unsqueeze(1),
@@ -328,13 +355,211 @@ def train_mixup_step(
             mixed_outputs[i, y2_label_ids_flat[y2_idx3]] = mixed[row].clone()
 
             label_ids = torch.cat([y1_label_ids[y1_idx], y2_label_ids_flat[y2_idx3]])
-            mixed_batch_y[i, label_ids] = torch.cat(
-                [lamda[:, 0], lamda_flat[y2_idx3]]
-            ).float()
 
-        outputs = model((outputs, *others), **output_opts)[0]
+            if not no_label_smoothing:
+                mixed_batch_y[i, label_ids] = torch.cat(
+                    [lamda[:, 0], lamda_flat[y2_idx3]]
+                ).float()
+
+        if flow_mixup_enabled:
+            outputs = model((outputs, *others), **output_opts)[0]
+            loss = criterion(outputs, batch_y)
+        else:
+            loss = 0
+
         mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
-        loss = criterion(outputs, batch_y) + criterion(mixed_outputs, mixed_batch_y)
+        loss = loss + criterion(mixed_outputs, mixed_batch_y)
+
+    optim.zero_grad()
+    scaler.scale(loss).backward()
+    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+    scaler.step(optim)
+    scaler.update()
+
+    return loss.item()
+
+
+def train_in_place_mixup_step(
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    batch_y: torch.Tensor,
+    scaler: GradScaler,
+    optim: Optimizer,
+    mixup_num: int,
+    mixup_alpha: float,
+    flow_mixup_enabled: bool,
+    no_label_smoothing: bool,
+    input_opts: Dict[str, Any],
+    output_opts: Dict[str, Any],
+    inv_w: np.ndarray,
+    gradient_clip_value: Optional[float] = None,
+    gradient_norm_queue: Optional[deque] = None,
+    device: torch.device = torch.device("cpu"),
+):
+    model.train()
+
+    batch_x = to_device(batch_x, device)
+    batch_y = to_device(batch_y, device)
+
+    with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+        outputs = model(batch_x, **input_opts)
+        outputs, others = outputs[0], outputs[1:]
+
+        for i in range(batch_x.size(0)):
+            label_ids = batch_y[i].nonzero(as_tuple=True)[0]
+
+            if label_ids.size(0) > 1:
+                mixed_outputs = outputs.clone()
+                mixed_batch_y = batch_y.clone()
+
+                while True:
+                    target_idx = (
+                        torch.tensor(1 - 1 / inv_w[label_ids.cpu()]).bernoulli().bool()
+                    )
+
+                    if len(target_idx.size()) == 0:
+                        target_idx = target_idx.unsqueeze(0)
+
+                    if target_idx.sum() > 0:
+                        break
+
+                mask = label_ids[target_idx].unsqueeze(-1) != label_ids.repeat(
+                    (target_idx.sum(), 1)
+                )
+                scores = (
+                    (outputs[i, label_ids[target_idx]] @ outputs[i, label_ids].T)
+                    / np.sqrt(label_ids.size(-1))
+                    * mask.to(device)
+                )
+
+                candidate_indices = scores.argsort(dim=-1, descending=True)
+
+                n = min(mixup_num, label_ids.size(0))
+
+                lamda = (
+                    torch.distributions.Dirichlet(torch.tensor([mixup_alpha] * n))
+                    .sample((target_idx.sum().item(),))
+                    .to(device)
+                    .to(outputs.dtype)
+                    .sort(descending=True)[0]
+                )
+
+                mixed = torch.cat(
+                    [
+                        mixed_outputs[i, label_ids[target_idx]].unsqueeze(1),
+                        mixed_outputs[i, label_ids[candidate_indices[:, : n - 1]]],
+                    ],
+                    dim=1,
+                )
+                mixed = (lamda.unsqueeze(-1) * mixed).sum(dim=1, dtype=outputs.dtype)
+                mixed_outputs[i, label_ids[target_idx]] = mixed
+
+                if not no_label_smoothing:
+                    mixed_batch_y[i, label_ids[target_idx]] = lamda[:, 0].float()
+            else:
+                mixed_outputs = None
+                mixed_batch_y = None
+
+        if flow_mixup_enabled or mixed_outputs is None:
+            outputs = model((outputs, *others), **output_opts)[0]
+            loss = criterion(outputs, batch_y)
+        else:
+            loss = 0
+
+        if mixed_outputs is not None:
+            mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
+            loss = loss + criterion(mixed_outputs, mixed_batch_y)
+
+    optim.zero_grad()
+    scaler.scale(loss).backward()
+    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+    scaler.step(optim)
+    scaler.update()
+
+    return loss.item()
+
+
+def train_in_place_mixup_step_v2(
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    batch_y: torch.Tensor,
+    scaler: GradScaler,
+    optim: Optimizer,
+    mixup_num: int,
+    mixup_alpha: float,
+    target_num: int,
+    adj: csr_matrix,
+    flow_mixup_enabled: bool,
+    no_label_smoothing: bool,
+    input_opts: Dict[str, Any],
+    output_opts: Dict[str, Any],
+    inv_w: np.ndarray,
+    gradient_clip_value: Optional[float] = None,
+    gradient_norm_queue: Optional[deque] = None,
+    device: torch.device = torch.device("cpu"),
+):
+    model.train()
+
+    batch_x = to_device(batch_x, device)
+    batch_y = to_device(batch_y, device)
+
+    with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+        outputs = model(batch_x, **input_opts)
+        outputs, others = outputs[0], outputs[1:]
+
+        mixed_outputs = outputs.clone()
+        mixed_batch_y = batch_y.clone()
+
+        for i in range(batch_x.size(0)):
+            label_ids = batch_y[i].nonzero(as_tuple=True)[0]
+
+            n = min(target_num, label_ids.size(0))
+            selected_label_ids = np.random.choice(label_ids.cpu(), n, replace=False)
+
+            for label_id in selected_label_ids:
+                neigh = adj[label_id].indices
+                n = min(mixup_num - 1, len(neigh))
+                selected_neigh = np.random.choice(
+                    neigh,
+                    size=n,
+                    p=torch.tensor(inv_w[neigh]).softmax(dim=-1),
+                    replace=False,
+                )
+
+                lamda = (
+                    torch.distributions.Dirichlet(torch.tensor([mixup_alpha] * (n + 1)))
+                    .sample()
+                    .to(device)
+                    .to(outputs.dtype)
+                )
+
+                mixed = torch.cat(
+                    [
+                        mixed_outputs[i, label_id].unsqueeze(0),
+                        mixed_outputs[i, selected_neigh],
+                    ],
+                    dim=0,
+                )
+                mixed = lamda.unsqueeze(1) * mixed
+
+                mixup_label_ids = [label_id] + selected_neigh.tolist()
+                mixed_outputs[i, mixup_label_ids] = mixed
+
+                if not no_label_smoothing:
+                    mixed_batch_y[i, mixup_label_ids] = lamda.float()
+                else:
+                    mixed_batch_y[i, mixup_label_ids] = 1.0
+
+        if flow_mixup_enabled:
+            outputs = model((outputs, *others), **output_opts)[0]
+            loss = criterion(outputs, batch_y)
+        else:
+            loss = 0
+
+        mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
+        loss = loss + criterion(mixed_outputs, mixed_batch_y)
 
     optim.zero_grad()
     scaler.scale(loss).backward()
@@ -369,23 +594,58 @@ def get_results(
     mlb: MultiLabelBinarizer,
     inv_w: Optional[np.ndarray] = None,
     is_test: bool = False,
+    train_labels: Optional[np.ndarray] = None,
     device: torch.device = torch.device("cpu"),
 ) -> Dict[str, float]:
     if mlb is None:
         mlb = MultiLabelBinarizer(sparse_output=True).fit(raw_y)
 
-    prediction = np.concatenate(
-        [
-            predict_step(model, batch[0], device=device)[1]
-            for batch in tqdm(dataloader, desc="Predict", leave=False)
-        ]
-    )
+    model.eval()
 
-    prediction = mlb.classes_[prediction]
+    sum_ranking = np.zeros(len(mlb.classes_), dtype=np.int)
+    scores = []
+    labels = []
+    coverage = []
+    for batch_x, batch_y in tqdm(dataloader, desc="Predict", leave=False):
+        with torch.no_grad():
+            logits = model(to_device(batch_x, device), mp_enabled=False)[0]
+            ranking = logits.argsort(descending=True, dim=-1).cpu()
+
+            y_scores = logits.cpu()
+            y_scores_mask = y_scores.masked_fill(~batch_y.bool(), np.inf)
+            y_min_relevant = y_scores_mask.min(dim=-1)[0].view(-1, 1)
+            coverage.append((y_scores >= y_min_relevant).sum(dim=-1))
+
+            s, l = torch.topk(logits, 50)
+            s = torch.sigmoid(s)
+
+            scores.append(s.cpu())
+            labels.append(l.cpu())
+
+            for i in range(batch_y.size(0)):
+                label_idx = batch_y[i].nonzero(as_tuple=True)[0]
+                rank = torch.cat(
+                    [(ranking[i] == l).nonzero(as_tuple=True)[0] for l in label_idx]
+                )
+                sum_ranking[label_idx] += rank.numpy() + 1
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if isinstance(dataloader.dataset, Subset):
+            y = dataloader.dataset.dataset.y[dataloader.dataset.indices]
+        else:
+            y = dataloader.dataset.y
+
+        avg_ranking = sum_ranking / y.sum(axis=0).A1
+        np.nan_to_num(avg_ranking, copy=False)
+
+    coverage = np.concatenate(coverage)
+    prediction = mlb.classes_[np.concatenate(labels)]
 
     if is_test:
         mlb = MultiLabelBinarizer(sparse_output=True).fit(raw_y)
-        inv_w = get_inv_propensity(mlb.transform(raw_y))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            inv_w = get_inv_propensity(mlb.transform(train_labels))
         results = get_precision_results2(prediction, raw_y, inv_w, mlb)
     else:
         with warnings.catch_warnings():
@@ -404,6 +664,9 @@ def get_results(
             if inv_w is not None:
                 psp5 = get_psp_5(prediction, raw_y, inv_w, mlb)
                 results["psp5"] = psp5
+
+    results["avg.rank"] = avg_ranking.mean()
+    results["coverage"] = coverage.mean()
 
     return results
 
@@ -517,7 +780,14 @@ def get_optimizer(
 @click.option(
     "--lr", type=click.FLOAT, default=1e-3, help="learning rate (Base Encoder)"
 )
+@click.option(
+    "--enable-loss-weight",
+    is_flag=True,
+    default=False,
+    help="Enable loss weights for BCE loss",
+)
 @click.option("--resume", is_flag=True, default=False, help="Resume training")
+@click.option("--resume-ckpt-path", type=click.STRING, help="ckpt for resume training")
 @click.option(
     "--gradient-max-norm",
     type=click.FLOAT,
@@ -539,6 +809,27 @@ def get_optimizer(
     help="Deferred stragtegy for mixup. Disable: -1",
 )
 @click.option("--mixup-num", type=click.INT, default=2, help="# of samples to be mixed")
+@click.option(
+    "--in-place-enabled", is_flag=True, default=False, help="Enable in-place mixup"
+)
+@click.option(
+    "--in-place-ver",
+    type=click.IntRange(1, 2),
+    default=1,
+    help="version of in-place mixup",
+)
+@click.option(
+    "--in-place-target-num",
+    type=click.INT,
+    default=3,
+    help="# of target for in-place mixup v2",
+)
+@click.option(
+    "--flow-mixup-enabled", is_flag=True, default=False, help="Enable flow mixup"
+)
+@click.option(
+    "--no-label-smoothing", is_flag=True, default=False, help="No label smoothing"
+)
 @log_elapsed_time
 def main(
     mode: str,
@@ -562,12 +853,19 @@ def main(
     num_workers: int,
     decay: float,
     lr: float,
+    enable_loss_weight: bool,
     resume: bool,
+    resume_ckpt_path: str,
     gradient_max_norm: float,
     mixup_enabled: bool,
     mixup_alpha: float,
     mixup_warmup: int,
     mixup_num: int,
+    in_place_enabled: bool,
+    in_place_ver: int,
+    in_place_target_num: int,
+    flow_mixup_enabled: bool,
+    no_label_smoothing: bool,
 ):
     ################################ Assert options ##################################
     ##################################################################################
@@ -600,7 +898,7 @@ def main(
         shutil.rmtree(ckpt_root_path)
         os.makedirs(ckpt_root_path, exist_ok=True)
 
-    if not test_run:
+    if not test_run and mode == "train":
         set_logger(os.path.join(ckpt_root_path, log_filename))
 
         copy_file(
@@ -632,6 +930,14 @@ def main(
     mlb = get_mlb(train_dataset.le_path)
     num_labels = len(mlb.classes_)
 
+    if in_place_ver == 2:
+        adj = lil_matrix(train_dataset.y.T @ train_dataset.y)
+        adj.setdiag(0)
+        adj = adj.tocsr()
+        adj.eliminate_zeros()
+    else:
+        adj = None
+
     logger.info(f"# of train dataset: {train_ids.shape[0]:,}")
     logger.info(f"# of valid dataset: {valid_ids.shape[0]:,}")
     logger.info(f"# of test dataset: {len(test_dataset):,}")
@@ -658,7 +964,9 @@ def main(
     scheduler = None
     scaler = GradScaler(enabled=mp_enabled)
 
-    criterion = nn.BCEWithLogitsLoss()
+    loss_weight = torch.tensor(inv_w) if enable_loss_weight else None
+    criterion = nn.BCEWithLogitsLoss(weight=loss_weight)
+    criterion.to(device)
 
     gradient_norm_queue = (
         deque([np.inf], maxlen=5) if gradient_max_norm is not None else None
@@ -675,9 +983,11 @@ def main(
     train_losses = deque(maxlen=print_step)
 
     if resume and mode == "train":
-        resume_ckpt_path = (
-            last_ckpt_path if os.path.exists(last_ckpt_path) else ckpt_path
-        )
+        if resume_ckpt_path is None:
+            resume_ckpt_path = (
+                last_ckpt_path if os.path.exists(last_ckpt_path) else ckpt_path
+            )
+
         if os.path.exists(resume_ckpt_path):
             logger.info("Resume Training")
             start_epoch, ckpt = load_checkpoint2(
@@ -765,22 +1075,66 @@ def main(
 
                 for i, (batch_x, batch_y) in enumerate(train_dataloader, 1):
                     if epoch >= mixup_warmup and mixup_enabled:
-                        train_loss = train_mixup_step(
-                            model,
-                            criterion,
-                            batch_x,
-                            batch_y,
-                            scaler,
-                            optimizer,
-                            mixup_num,
-                            mixup_alpha,
-                            input_opts,
-                            output_opts,
-                            inv_w,
-                            gradient_max_norm,
-                            gradient_norm_queue,
-                            device,
-                        )
+                        if in_place_enabled:
+                            if in_place_ver == 1:
+                                train_loss = train_in_place_mixup_step(
+                                    model,
+                                    criterion,
+                                    batch_x,
+                                    batch_y,
+                                    scaler,
+                                    optimizer,
+                                    mixup_num,
+                                    mixup_alpha,
+                                    flow_mixup_enabled,
+                                    no_label_smoothing,
+                                    input_opts,
+                                    output_opts,
+                                    inv_w,
+                                    gradient_max_norm,
+                                    gradient_norm_queue,
+                                    device,
+                                )
+                            else:
+                                train_loss = train_in_place_mixup_step_v2(
+                                    model,
+                                    criterion,
+                                    batch_x,
+                                    batch_y,
+                                    scaler,
+                                    optimizer,
+                                    mixup_num,
+                                    mixup_alpha,
+                                    in_place_target_num,
+                                    adj,
+                                    flow_mixup_enabled,
+                                    no_label_smoothing,
+                                    input_opts,
+                                    output_opts,
+                                    inv_w,
+                                    gradient_max_norm,
+                                    gradient_norm_queue,
+                                    device,
+                                )
+                        else:
+                            train_loss = train_mixup_step(
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                mixup_num,
+                                mixup_alpha,
+                                flow_mixup_enabled,
+                                no_label_smoothing,
+                                input_opts,
+                                output_opts,
+                                inv_w,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
                     else:
                         train_loss = train_step(
                             model,
@@ -819,7 +1173,10 @@ def main(
                         )
 
                         if "psp5" in results:
-                            val_log_msg += f"psp@5: {results['psp5']:.5f}"
+                            val_log_msg += f"psp@5: {results['psp5']:.5f} "
+
+                        val_log_msg += f"avg.rank: {results['avg.rank']:.2f} "
+                        val_log_msg += f"coverage: {results['coverage']:.2f}"
 
                         if best < results[early_criterion]:
                             best = results[early_criterion]
@@ -896,15 +1253,24 @@ def main(
         load_checkpoint2(ckpt_path, [model], set_rng_state=False)
 
     results = get_results(
-        model, test_dataloader, test_dataset.raw_y, mlb, inv_w, True, device
+        model,
+        test_dataloader,
+        test_dataset.raw_y,
+        mlb,
+        inv_w,
+        True,
+        train_dataset.raw_y,
+        device,
     )
 
     logger.info(
-        f"\np@1,3,5: {results['p1']:.4f}, {results['p3']:.4f}, {results['p5']:.4f}"
-        f"\nn@1,3,5: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}"
-        f"\npsp@1,3,5: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}"
-        f"\npsn@1,3,5: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}"
-        f"\nr@1,5,10: {results['r1']:.4f}, {results['r5']:.4f}, {results['r10']:.4f}"
+        f"\np@1,3,5,10: {results['p1']:.4f}, {results['p3']:.4f}, {results['p5']:.4f}, {results['p10']:.4f}"
+        f"\nn@1,3,5,10: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}, {results['n10']:.4f}"
+        f"\npsp@1,3,5,10,20: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}, {results['psp10']:.4f}, {results['psp20']:.4f}"
+        f"\npsn@1,3,5,10: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}, {results['psn10']:.4f}"
+        # f"\nr@1,5,10: {results['r1']:.4f}, {results['r5']:.4f}, {results['r10']:.4f}"
+        f"\navg.rank: {results['avg.rank']:.2f} "
+        f"\ncoverage: {results['coverage']:.2f}"
     )
     logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
     ##################################################################################

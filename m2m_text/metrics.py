@@ -114,10 +114,12 @@ def get_precision_results2(
         p1 = get_p_1(prediction, targets, mlb)
         p3 = get_p_3(prediction, targets, mlb)
         p5 = get_p_5(prediction, targets, mlb)
+        p10 = get_p_10(prediction, targets, mlb)
 
         n1 = get_n_1(prediction, targets, mlb)
         n3 = get_n_3(prediction, targets, mlb)
         n5 = get_n_5(prediction, targets, mlb)
+        n10 = get_n_10(prediction, targets, mlb)
 
         r1 = get_r_1(prediction, targets, mlb)
         r5 = get_r_5(prediction, targets, mlb)
@@ -127,9 +129,11 @@ def get_precision_results2(
             "p1": p1,
             "p3": p3,
             "p5": p5,
+            "p10": p10,
             "n1": n1,
             "n3": n3,
             "n5": n5,
+            "n10": n10,
             "r1": r1,
             "r5": r5,
             "r10": r10,
@@ -139,19 +143,25 @@ def get_precision_results2(
             psp1 = get_psp_1(prediction, targets, inv_w, mlb)
             psp3 = get_psp_3(prediction, targets, inv_w, mlb)
             psp5 = get_psp_5(prediction, targets, inv_w, mlb)
+            psp10 = get_psp_10(prediction, targets, inv_w, mlb)
+            psp20 = get_psp(prediction, targets, inv_w, mlb, top=20)
 
             psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
             psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
             psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
+            psn10 = get_psndcg_10(prediction, targets, inv_w, mlb)
 
             ret = {
                 **ret,
                 "psp1": psp1,
                 "psp3": psp3,
                 "psp5": psp5,
+                "psp10": psp10,
+                "psp20": psp20,
                 "psn1": psn1,
                 "psn3": psn3,
                 "psn5": psn5,
+                "psn10": psn10,
             }
 
     return ret

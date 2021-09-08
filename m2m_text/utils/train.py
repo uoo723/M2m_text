@@ -237,3 +237,32 @@ def normalize_inv_w(inv_w: np.ndarray, epsilon: float = 1e-3) -> torch.Tensor:
     prob = (prob - prob.min() + epsilon) / (prob.max() - prob.min() + epsilon)
     prob = prob * (1 - 2 * epsilon) + epsilon
     return prob
+
+
+def get_avg_ranking(
+    model: nn.Module,
+    dataloader: DataLoader,
+    num_labels: int,
+    device: torch.device = torch.device("cpu"),
+) -> np.ndarray:
+    model.eval()
+
+    sum_ranking = np.zeros(num_labels, dtype=np.int)
+
+    for batch_x, batch_y in tqdm(dataloader, desc="Predict", leave=False):
+        with torch.no_grad():
+            outputs = model(to_device(batch_x, device), mp_enabled=False)[0]
+            ranking = outputs.argsort(descending=True, dim=-1).cpu()
+
+            for i in range(batch_y.size(0)):
+                label_idx = batch_y[i].nonzero(as_tuple=True)[0]
+                rank = torch.cat(
+                    [(ranking[i] == l).nonzero(as_tuple=True)[0] for l in label_idx]
+                )
+                sum_ranking[label_idx] += rank.numpy() + 1
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        avg_ranking = sum_ranking / dataloader.dataset.y.sum(axis=0).A1
+        np.nan_to_num(avg_ranking, copy=False)
+
+    return avg_ranking
