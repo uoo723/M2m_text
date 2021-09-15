@@ -2,6 +2,7 @@
 Created on 2020/12/31
 @author Sangwoo Han
 """
+import re
 from collections import Counter
 from typing import Callable, Iterable, Optional, Union
 
@@ -84,7 +85,7 @@ class LabelEncoder(preprocessing.LabelEncoder):
 
 def build_vocab(
     texts: Iterable[Iterable[str]],
-    w2v_model: Optional[Union[KeyedVectors, str]] = None,
+    w2v_model: Optional[Union[KeyedVectors, str]],
     pad: str = "<PAD>",
     unknown: str = "<UNK>",
     vocab_size: int = 500000,
@@ -95,7 +96,7 @@ def build_vocab(
 
     Args:
         texts (iter[iter[str]]): List of tokenized texts.
-        w2v_model (KeyedVectors or str, optional): Pretrained w2v model
+        w2v_model (KeyedVectors or str): Pretrained w2v model
         pad (str): Pad token
         unknwon (str): Unknwon token
         vocab_size (int): Maximum number of vocab. default: 500,000
@@ -108,7 +109,7 @@ def build_vocab(
         vocab (np.npdarray): Numpy array of vocab.
             e.g. vocab[0] = 'token1'
     """
-    if w2v_model is not None and isinstance(w2v_model, str):
+    if isinstance(w2v_model, str):
         w2v_model = KeyedVectors.load(w2v_model)
 
     vocab = [pad, unknown]
@@ -116,10 +117,10 @@ def build_vocab(
 
     for word, freq in sorted(
         counter.items(),
-        key=lambda x: (x[1], x[0] in w2v_model if w2v_model else True),
+        key=lambda x: (x[1], x[0] in w2v_model),
         reverse=True,
     ):
-        if (w2v_model is not None and word in w2v_model) or freq >= freq_times:
+        if word in w2v_model or freq >= freq_times:
             vocab.append(word)
 
         if freq < max_times or vocab_size == len(vocab):
@@ -187,4 +188,4 @@ def tokenize(
 
 def _tokenize_single(text: str, tokenizer: Callable, lower: bool):
     text = text.lower() if lower else text
-    return tokenizer(text)
+    return [token for token in tokenizer(text) if len(re.sub(r"[^\w]", "", token)) > 0]

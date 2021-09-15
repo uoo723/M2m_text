@@ -27,6 +27,7 @@ from transformers.models.roberta.modeling_roberta import (
 
 from .datasets._base import Dataset
 from .modules import (
+    CNNLayer,
     CorNet,
     Embedding,
     GateAttention,
@@ -547,7 +548,7 @@ class LaRoberta(RobertaPreTrainedModel):
         labels=None,
         output_attentions=None,
         output_hidden_states=None,
-        return_dict=True,
+        return_dict=False,
         return_emb=False,
         pass_emb=False,
         return_attn=False,
@@ -600,7 +601,7 @@ class LaRoberta(RobertaPreTrainedModel):
                 attn_out = inputs[0]
 
             if return_emb:
-                return (sequence_output, *outputs[1:])
+                return (sequence_output, attention_mask, *outputs[1:])
 
             # if sequence_output is not None:
             #     sequence_output = self.batch_m(sequence_output)
@@ -628,7 +629,7 @@ class LaRoberta(RobertaPreTrainedModel):
                     loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
         if not return_dict:
-            output = (logits,) + outputs[2:]
+            output = (logits,)
             return ((loss,) + output) if loss is not None else output
 
         return SequenceClassifierOutput(
@@ -1677,3 +1678,107 @@ class Pooling(nn.Module):
             raise AssertionError
 
         return outputs
+
+
+class LaCNN(Network):
+    """Implementation of modified CNN Kim
+
+    Appended Label-wise attention after CNN outputs.
+    """
+
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: int,
+        linear_size: List[int],
+        num_filters: int,
+        filter_sizes: List[int],
+        seq_len: int,
+        cnn_dropout: float = 0.2,
+        stride: int = 1,
+        pooling_type: str = "max",
+        mp_enabled: bool = False,
+        **kwargs,
+    ):
+        super().__init__(emb_size, **kwargs)
+        self.cnn = CNNLayer(
+            num_filters,
+            filter_sizes,
+            seq_len,
+            emb_size,
+            stride,
+            pooling_type,
+            cnn_dropout,
+        )
+        self.attention = MLAttention(num_labels, num_filters)
+        self.linear = MLLinear([num_filters] + linear_size, 1)
+        self.num_conv = len(filter_sizes)
+        self.mp_enabled = mp_enabled
+
+    def forward(
+        self,
+        inputs: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
+        return_emb: bool = False,
+        pass_emb: bool = False,
+        return_attn: bool = False,
+        pass_attn: bool = False,
+        mp_enabled: Optional[bool] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        if return_emb and pass_emb:
+            raise ValueError("`return_emb` and `pass_emb` both cannot be True")
+
+        if return_attn and pass_attn:
+            raise ValueError("`return_attn` and `pass_attn` both cannot be True")
+
+        return_kwargs = {
+            "return_emb": return_emb,
+            "return_attn": return_attn,
+        }
+
+        pass_kwargs = {
+            "pass_emb": pass_emb,
+            "pass_attn": pass_attn,
+        }
+
+        for kw1, kw2 in combinations(return_kwargs.keys(), 2):
+            if return_kwargs[kw1] and return_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        for kw1, kw2 in combinations(pass_kwargs.keys(), 2):
+            if pass_kwargs[kw1] and pass_kwargs[kw2]:
+                raise ValueError(f"`{kw1}` and `{kw2}` both cannot be True")
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            if not pass_emb and not pass_attn:
+                emb_out, _, _ = self.emb(inputs, **kwargs)
+            elif pass_emb:
+                emb_out = inputs[0]
+            else:
+                emb_out = None
+
+            if return_emb:
+                return (emb_out,)
+
+            if emb_out is not None:
+                cnn_out = self.cnn(emb_out)
+            else:
+                cnn_out = None
+
+            if cnn_out is not None:
+                masks = torch.ones(cnn_out.size(0), self.num_conv, dtype=torch.bool).to(
+                    cnn_out.device
+                )
+                attn_out = self.attention(cnn_out, masks)
+            elif pass_attn:
+                attn_out = inputs[0]
+            else:
+                attn_out = None
+
+            if return_attn:
+                return (attn_out,)
+
+            return (self.linear(attn_out),)

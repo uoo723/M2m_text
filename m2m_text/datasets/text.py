@@ -5,6 +5,7 @@ Created on 2021/01/08
 Dataset for text format
 """
 import os
+import warnings
 from typing import Optional, Tuple
 
 import numpy as np
@@ -233,7 +234,10 @@ class TextDataset(Dataset):
         self._labels = labels
 
         le = self.get_le(self.le_path, labels)
-        labels = le.transform(labels)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            labels = le.transform(labels)
 
         self.emb_init = get_emb_init(
             self.emb_init_path, self.vocab_path, self.w2v_model_path
@@ -702,6 +706,24 @@ class Wiki10_31K(Wiki10):
     file_list = [
         ("train_raw.npz", "7295000dae7ba078a9dcd3ce2ab2f19c"),
         ("test_raw.npz", "991d6afc06a4fa57a48ff3d8e4355f3a"),
+    ]
+
+    @classmethod
+    def splits(cls, *args, **kwargs):
+        return super().splits(*args, **kwargs)
+
+
+class Amazon_670K(AmazonCat):
+    base_folder = "Amazon-670K"
+
+    url = "https://drive.google.com/uc?id=1MAL8LYQX-Uak0o0kcmy7sVNsAYsESroH"
+
+    filename = "Amazon-670K.tar.gz"
+    tgz_md5 = "bd4035f3e6b4626cc501b6e61e3251da"
+
+    file_list = [
+        ("train_raw.npz", "f58b3e4cda6f0b840923518cbd85a8ae"),
+        ("test_raw.npz", "9ee25f633f444472434232cfaad78eb3"),
     ]
 
     @classmethod

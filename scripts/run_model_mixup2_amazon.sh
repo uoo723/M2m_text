@@ -5,16 +5,16 @@ export MLFLOW_EXPERIMENT_NAME=Cornet
 
 # DATASET=EURLex-4K
 # DATASET=EURLex-300
-# DATASET=AmazonCat13K
-DATASET=Wiki10-31K
+DATASET=AmazonCat13K
+# DATASET=Wiki10-31K
 # DATASET=AmazonCat-1000
 # DATASET=Wiki10-3000
 
 # MODEL=SBert
 # MODEL=AttentionRNNEncoder2
 # MODEL=AttentionRNNEncoder
-MODEL=AttentionRNN
-# MODEL=LaRoberta
+# MODEL=AttentionRNN
+MODEL=LaRoberta
 # MODEL=LaCNN
 
 # LE_MODEL=LabelEncoder
@@ -28,48 +28,46 @@ args=(
     --run-script $0
     # --test-run
     $LOG_DIR
-    --num-epochs 200
-    # --num-epochs 10  # AmazonCat13K
+    # --num-epochs 200
+    --num-epochs 10  # AmazonCat13K
     --train-batch-size 32
     --test-batch-size 64
-    # --ckpt-name baseline_n5
-    --ckpt-name inplace_n5_t8
+    --ckpt-name baseline_n5
+    # --ckpt-name inplace_n5
     # --ckpt-name word_n5
     # --ckpt-name test
-    --early-criterion 'psp5'
+    --early-criterion 'n5'
     # --early-criterion 'psp5'
     --reset-best
     --seed $1
-    --swa-warmup 4
-    # --swa-warmup 1  # AmazonCat13K
-    --eval-step 300
-    --print-step 100
-    # --eval-step 10000  # AmazonCat13K
-    # --print-step 3000  # AmazonCat13K
-    --early 20
-    # --early 5  # AmazonCat13K
+    # --swa-warmup 4
+    --swa-warmup 1  # AmazonCat13K
+    # --eval-step 300
+    # --print-step 100
+    --eval-step 10000  # AmazonCat13K
+    --print-step 3000  # AmazonCat13K
+    # --early 20
+    --early 5  # AmazonCat13K
     --mp-enabled
     --gradient-max-norm 5.0
     --num-workers 0
-    --mixup-enabled
-    # --mixup-lr 1e-4
+    # --mixup-enabled
     --mixup-type 'inplace2'
-    # --mixup-type "word"
-    --mixup-warmup 10
-    # --mixup-warmup 1  # AmazonCat13K
+    # --mixup-type 'word'
+    # --mixup-warmup 20
+    --mixup-warmup 2  # AmazonCat13K
     # --mixup-warmup -1
-    # --mixup-num 4
-    --mixup-num 4
-    --in-place-target-num 6
+    --mixup-num 2
+    # --in-place-enabled
+    # --in-place-ver 2
+    --in-place-target-num 4
     # --flow-mixup-enabled
-    # --flow-alpha 0.5
-    --mixup-alpha 0.4
+    --mixup-alpha 0.2
     # --enable-loss-weight
     # --no-label-smoothing
     # --resume
-    # --resume-ckpt-path ./checkpoint/inplace_n5_t4_AttentionRNN_Wiki10_31K_0/ckpt_before_mixup.pt
+    # --resume-ckpt-path ./checkpoint/inplace_n5_t2_AttentionRNN_AmazonCat13K_0/ckpt_before_mixup.pt
     # --mode 'eval'
-    # --eval-ckpt-path checkpoint/baseline_n5_AttentionRNN_Wiki10_31K_0/ckpt.last.pt
 )
 
 python main_mixup2.py "${args[@]}"

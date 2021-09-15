@@ -9,3 +9,4 @@ dataset:
 
 model:
   emb_init: data/EURLex4K/emb_init.npy
+  seq_len: 500

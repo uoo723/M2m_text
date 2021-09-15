@@ -37,14 +37,16 @@ def get_word_emb(
     Returns:
         embedding (np.ndarray) -> Emebedding 2-D numpy array.
     """
-    if w2v_model is not None and isinstance(w2v_model, str):
+    if isinstance(w2v_model, str):
         w2v_model = KeyedVectors.load(w2v_model)
 
     emb_init = []
     emb_size = w2v_model.vector_size
 
-    for token in enumerate(vocab):
-        if token in [pad, unknown] or token not in w2v_model:
+    for token in vocab:
+        if token == pad:
+            emb_init.append(np.zeros(emb_size))
+        elif token == unknown or token not in w2v_model:
             emb_init.append(np.random.uniform(-1.0, 1.0, emb_size))
         else:
             emb_init.append(w2v_model[token])

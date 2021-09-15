@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.utils import check_eq_shape, dgl_warning, expand_as_pair
+from torch.nn.modules import pooling
 
 
 class Identity(nn.Module):
@@ -31,7 +32,7 @@ class Embedding(nn.Module):
         padding_idx: int = 0,
         dropout: bool = 0.2,
     ):
-        super(Embedding, self).__init__()
+        super().__init__()
         if emb_init is not None:
             if type(emb_init) == str:
                 emb_init = np.load(emb_init)
@@ -137,7 +138,7 @@ class LSTMEncoder(nn.Module):
 
 class MLAttention(nn.Module):
     def __init__(self, num_labels: int, hidden_size: int):
-        super(MLAttention, self).__init__()
+        super().__init__()
         self.attention = nn.Linear(hidden_size, num_labels, bias=False)
         nn.init.xavier_uniform_(self.attention.weight)
 
@@ -216,7 +217,7 @@ class MLLinear(nn.Module):
     def __init__(
         self, linear_size: List[int], output_size: int, enable_layer_norm: bool = False
     ):
-        super(MLLinear, self).__init__()
+        super().__init__()
         self.linear = nn.ModuleList(
             nn.Linear(in_s, out_s)
             for in_s, out_s in zip(linear_size[:-1], linear_size[1:])
@@ -606,3 +607,64 @@ class SAGEConv(nn.Module):
             if self.norm is not None:
                 rst = self.norm(rst)
             return rst
+
+
+class CNNLayer(nn.Module):
+    """CNN Layer for XML-CNN
+
+    Reference:
+        https://github.com/siddsax/XML-CNN
+        https://github.com/galsang/CNN-sentence-classification-pytorch
+    """
+
+    def __init__(
+        self,
+        num_filters: int,
+        filter_sizes: List[int],
+        seq_len: int,
+        emb_dim: int,
+        stride: int = 1,
+        pooling_type: str = "max",
+        dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+
+        assert pooling_type in ["max", "avg"]
+
+        self.conv_layers = nn.ModuleList()
+        self.pool_layers = nn.ModuleList()
+        self.dropout = nn.Dropout(dropout)
+
+        for filter_size in filter_sizes:
+            out_size = get_conv_out_size(seq_len, filter_size, stride=stride)
+            conv = nn.Conv1d(emb_dim, num_filters, filter_size, stride=stride)
+            nn.init.xavier_uniform_(conv.weight)
+
+            if pooling_type == "avg":
+                pool = nn.AvgPool1d(out_size)
+            elif pooling_type == "max":
+                pool = nn.MaxPool1d(out_size)
+
+            self.conv_layers.append(conv)
+            self.pool_layers.append(pool)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        inputs = inputs.transpose(1, 2)
+
+        return self.dropout(
+            torch.cat(
+                [
+                    pool(F.relu(conv(inputs))).transpose(1, 2)
+                    for conv, pool in zip(self.conv_layers, self.pool_layers)
+                ],
+                1,
+            )
+        )
+
+
+def get_conv_out_size(
+    in_size: int, kernel_size: int, padding: int = 0, dilation: int = 1, stride: int = 1
+) -> int:
+    a = in_size + 2 * padding - dilation * (kernel_size - 1) - 1
+    b = int(a / stride)
+    return b + 1

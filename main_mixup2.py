@@ -7,6 +7,7 @@ Instace Anchor new version, no cluster
 import copy
 import os
 import shutil
+import time
 import warnings
 from collections import deque
 from pathlib import Path
@@ -26,17 +27,17 @@ from torch.optim import Optimizer
 from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
 
 from m2m_text.datasets import (
     AmazonCat,
     AmazonCat13K,
+    BertDataset,
     EURLex,
     EURLex4K,
     Wiki10,
     Wiki10_31K,
 )
-from m2m_text.datasets.sbert import SBertDataset, collate_fn
+from m2m_text.datasets.sbert import collate_fn2
 from m2m_text.datasets.text import TextDataset
 from m2m_text.metrics import (
     get_inv_propensity,
@@ -46,16 +47,14 @@ from m2m_text.metrics import (
     get_psp_5,
     get_r_10,
 )
-from m2m_text.networks import AttentionRNN, LaRoberta
+from m2m_text.networks import AttentionRNN, LaCNN, LaRoberta
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
-from m2m_text.utils.mixup import MixUp, mixup
+from m2m_text.utils.mixup import mixup
 from m2m_text.utils.model import load_checkpoint2, save_checkpoint2
 from m2m_text.utils.train import (
     clip_gradient,
-    get_avg_ranking,
     log_elapsed_time,
-    normalize_inv_w,
     set_logger,
     set_seed,
     swa_init,
@@ -76,6 +75,7 @@ DATASET_CLS = {
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
     "LaRoberta": LaRoberta,
+    "LaCNN": LaCNN,
 }
 
 TRANSFORMER_MODELS = ["LaRoberta"]
@@ -88,16 +88,14 @@ def get_model(
     mp_enabled: bool,
     device: torch.device,
 ) -> nn.Module:
-
     model_cnf = copy.deepcopy(model_cnf)
     model_name = model_cnf["name"]
 
     if model_name in TRANSFORMER_MODELS:
-        model_name = model_cnf["model"].pop("model_name")
         model = (
             MODEL_CLS[model_name]
             .from_pretrained(
-                model_name,
+                model_cnf["model"].pop("model_name"),
                 num_labels=num_labels,
                 mp_enabled=mp_enabled,
                 **model_cnf["model"],
@@ -151,47 +149,32 @@ def get_dataloader(
     model_name = model_cnf["name"]
 
     if model_name in TRANSFORMER_MODELS:
-        train_texts = train_dataset.raw_data()[0]
-        test_texts = test_dataset.raw_data()[0]
-
-        tokenizer = AutoTokenizer.from_pretrained(model_cnf["model"]["model_name"])
-
-        train_sbert_dataset = SBertDataset(
-            tokenizer(
-                [s.strip() for s in train_texts[train_ids]], **model_cnf["tokenizer"]
-            ),
-            train_dataset.y[train_ids],
+        train_dataset = BertDataset(
+            train_dataset, model_cnf["model"]["model_name"], **model_cnf["tokenizer"]
         )
-        valid_sbert_dataset = SBertDataset(
-            tokenizer(
-                [s.strip() for s in train_texts[valid_ids]], **model_cnf["tokenizer"]
-            ),
-            train_dataset.y[valid_ids],
-        )
-        test_sbert_dataset = SBertDataset(
-            tokenizer([s.strip() for s in test_texts], **model_cnf["tokenizer"]),
-            test_dataset.y,
+        test_dataset = BertDataset(
+            test_dataset, model_cnf["model"]["model_name"], **model_cnf["tokenizer"]
         )
 
         train_dataloader = DataLoader(
-            train_sbert_dataset,
+            Subset(train_dataset, train_ids),
             batch_size=train_batch_size,
             shuffle=True,
-            collate_fn=collate_fn,
+            collate_fn=collate_fn2,
             num_workers=num_workers,
             pin_memory=False if no_cuda else True,
         )
         valid_dataloader = DataLoader(
-            valid_sbert_dataset,
+            Subset(train_dataset, valid_ids),
             batch_size=test_batch_size,
-            collate_fn=collate_fn,
+            collate_fn=collate_fn2,
             num_workers=num_workers,
             pin_memory=False if no_cuda else True,
         )
         test_dataloader = DataLoader(
-            test_sbert_dataset,
+            test_dataset,
             batch_size=test_batch_size,
-            collate_fn=collate_fn,
+            collate_fn=collate_fn2,
             num_workers=num_workers,
             pin_memory=False if no_cuda else True,
         )
@@ -219,6 +202,11 @@ def get_dataloader(
     return train_dataloader, valid_dataloader, test_dataloader
 
 
+def set_lr(optim: Optimizer, lr: float) -> None:
+    for p in optim.param_groups:
+        p["lr"] = lr
+
+
 def train_step(
     model: nn.Module,
     criterion: nn.Module,
@@ -236,13 +224,19 @@ def train_step(
         outputs = model(to_device(batch_x, device))[0]
         loss = criterion(outputs, to_device(batch_y, device))
 
+    optim_start = time.time()
     optim.zero_grad()
 
-    scaler.scale(loss).backward()
+    loss = scaler.scale(loss)
+    loss.backward()
+
     scaler.unscale_(optim)
     clip_gradient(model, gradient_norm_queue, gradient_clip_value)
     scaler.step(optim)
     scaler.update()
+    optim_end = time.time()
+
+    # print(f"optim: {(optim_end - optim_start) * 1000:.2f} ms")
 
     return loss.item()
 
@@ -257,6 +251,7 @@ def train_mixup_step(
     mixup_num: int,
     mixup_alpha: float,
     flow_mixup_enabled: bool,
+    flow_alpha: float,
     no_label_smoothing: bool,
     input_opts: Dict[str, Any],
     output_opts: Dict[str, Any],
@@ -265,6 +260,7 @@ def train_mixup_step(
     gradient_norm_queue: Optional[deque] = None,
     device: torch.device = torch.device("cpu"),
 ):
+    """random하게 두 샘플 mixup"""
     model.train()
 
     batch_x = to_device(batch_x, device)
@@ -366,12 +362,72 @@ def train_mixup_step(
             loss = criterion(outputs, batch_y)
         else:
             loss = 0
+            flow_alpha = 1.0
 
         mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
-        loss = loss + criterion(mixed_outputs, mixed_batch_y)
+        loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
 
     optim.zero_grad()
-    scaler.scale(loss).backward()
+
+    loss = scaler.scale(loss)
+    loss.backward()
+
+    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+    scaler.step(optim)
+    scaler.update()
+
+    return loss.item()
+
+
+def train_word_mixup_step(
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    batch_y: torch.Tensor,
+    scaler: GradScaler,
+    optim: Optimizer,
+    mixup_alpha: float,
+    flow_mixup_enabled: bool,
+    flow_alpha: float,
+    gradient_clip_value: Optional[float] = None,
+    gradient_norm_queue: Optional[deque] = None,
+    device: torch.device = torch.device("cpu"),
+):
+    model.train()
+
+    batch_size = batch_y.size(0)
+
+    batch_x = to_device(batch_x, device)
+    batch_y = to_device(batch_y, device)
+
+    with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+        outputs = model(batch_x, return_emb=True)
+        outputs, others = outputs[0], outputs[1:]
+
+        mixed_outputs = outputs.clone()
+        mixed_batch_y = batch_y.clone()
+
+        ridx = torch.randperm(batch_size)
+        lamda = torch.distributions.Beta(mixup_alpha, mixup_alpha).sample()
+
+        mixed_outputs = mixup(mixed_outputs, mixed_outputs[ridx], lamda)
+        mixed_batch_y = mixup(mixed_batch_y, mixed_batch_y[ridx], lamda)
+
+        if flow_mixup_enabled:
+            outputs = model((outputs, *others), pass_emb=True)[0]
+            loss = criterion(outputs, batch_y)
+        else:
+            loss = 0
+            flow_alpha = 1.0
+
+        mixed_outputs = model((mixed_outputs, *others), pass_emb=True)[0]
+        loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
+
+    optim.zero_grad()
+
+    loss = scaler.scale(loss)
+    loss.backward()
+
     clip_gradient(model, gradient_norm_queue, gradient_clip_value)
     scaler.step(optim)
     scaler.update()
@@ -389,9 +445,8 @@ def train_in_place_mixup_step(
     mixup_num: int,
     mixup_alpha: float,
     flow_mixup_enabled: bool,
+    flow_alpha: float,
     no_label_smoothing: bool,
-    input_opts: Dict[str, Any],
-    output_opts: Dict[str, Any],
     inv_w: np.ndarray,
     gradient_clip_value: Optional[float] = None,
     gradient_norm_queue: Optional[deque] = None,
@@ -403,7 +458,7 @@ def train_in_place_mixup_step(
     batch_y = to_device(batch_y, device)
 
     with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
-        outputs = model(batch_x, **input_opts)
+        outputs = model(batch_x, return_attn=True)
         outputs, others = outputs[0], outputs[1:]
 
         for i in range(batch_x.size(0)):
@@ -462,17 +517,21 @@ def train_in_place_mixup_step(
                 mixed_batch_y = None
 
         if flow_mixup_enabled or mixed_outputs is None:
-            outputs = model((outputs, *others), **output_opts)[0]
+            outputs = model((outputs, *others), pass_attn=True)[0]
             loss = criterion(outputs, batch_y)
         else:
             loss = 0
+            flow_alpha = 1.0
 
         if mixed_outputs is not None:
-            mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
-            loss = loss + criterion(mixed_outputs, mixed_batch_y)
+            mixed_outputs = model((mixed_outputs, *others), pass_attn=True)[0]
+            loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
 
     optim.zero_grad()
-    scaler.scale(loss).backward()
+
+    loss = scaler.scale(loss)
+    loss.backward()
+
     clip_gradient(model, gradient_norm_queue, gradient_clip_value)
     scaler.step(optim)
     scaler.update()
@@ -492,9 +551,8 @@ def train_in_place_mixup_step_v2(
     target_num: int,
     adj: csr_matrix,
     flow_mixup_enabled: bool,
+    flow_alpha: float,
     no_label_smoothing: bool,
-    input_opts: Dict[str, Any],
-    output_opts: Dict[str, Any],
     inv_w: np.ndarray,
     gradient_clip_value: Optional[float] = None,
     gradient_norm_queue: Optional[deque] = None,
@@ -502,25 +560,42 @@ def train_in_place_mixup_step_v2(
 ):
     model.train()
 
+    batch_size = batch_y.size(0)
+
     batch_x = to_device(batch_x, device)
     batch_y = to_device(batch_y, device)
 
+    with_start = time.time()
     with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
-        outputs = model(batch_x, **input_opts)
+        outputs = model(batch_x, return_attn=True)
         outputs, others = outputs[0], outputs[1:]
+
+        emb_size = outputs.size(-1)
 
         mixed_outputs = outputs.clone()
         mixed_batch_y = batch_y.clone()
 
-        for i in range(batch_x.size(0)):
+        outer_for_start = time.time()
+
+        labels = torch.zeros(batch_size, target_num, mixup_num, dtype=torch.int64)
+        masks = torch.zeros_like(labels, dtype=torch.bool)
+        lamda = torch.ones_like(labels, dtype=torch.float)
+
+        for i in range(batch_size):
             label_ids = batch_y[i].nonzero(as_tuple=True)[0]
 
             n = min(target_num, label_ids.size(0))
             selected_label_ids = np.random.choice(label_ids.cpu(), n, replace=False)
 
-            for label_id in selected_label_ids:
+            inner_for_start = time.time()
+            for j, label_id in enumerate(selected_label_ids):
                 neigh = adj[label_id].indices
+
+                if neigh.shape[0] == 0:
+                    continue
+
                 n = min(mixup_num - 1, len(neigh))
+
                 selected_neigh = np.random.choice(
                     neigh,
                     size=n,
@@ -528,44 +603,91 @@ def train_in_place_mixup_step_v2(
                     replace=False,
                 )
 
-                lamda = (
-                    torch.distributions.Dirichlet(torch.tensor([mixup_alpha] * (n + 1)))
-                    .sample()
-                    .to(device)
-                    .to(outputs.dtype)
-                )
+                labels[i, j, 0] = label_id
+                labels[i, j, 1 : n + 1] = torch.from_numpy(selected_neigh)
+                masks[i, j, : n + 1] = True
 
-                mixed = torch.cat(
-                    [
-                        mixed_outputs[i, label_id].unsqueeze(0),
-                        mixed_outputs[i, selected_neigh],
-                    ],
-                    dim=0,
-                )
-                mixed = lamda.unsqueeze(1) * mixed
+                lam = torch.distributions.Dirichlet(
+                    torch.tensor([mixup_alpha] * (n + 1))
+                ).sample().sort()[0]
+
+                lamda[i, j, : n + 1] = lam
+
+                # mixed = torch.cat(
+                #     [
+                #         mixed_outputs[i, label_id].unsqueeze(0),
+                #         mixed_outputs[i, selected_neigh],
+                #     ],
+                #     dim=0,
+                # )
+                # mixed = lamda.unsqueeze(1) * mixed  # N x D
 
                 mixup_label_ids = [label_id] + selected_neigh.tolist()
-                mixed_outputs[i, mixup_label_ids] = mixed
+                # mixed_outputs[i, mixup_label_ids] = mixed
 
                 if not no_label_smoothing:
-                    mixed_batch_y[i, mixup_label_ids] = lamda.float()
+                    mixed_batch_y[i, mixup_label_ids] = lam.to(device)
                 else:
                     mixed_batch_y[i, mixup_label_ids] = 1.0
 
+            inner_for_end = time.time()
+
+        indices = labels.view(batch_size, -1, 1).repeat(1, 1, emb_size).to(device)
+        mixed = torch.gather(mixed_outputs, 1, indices, sparse_grad=True).view(
+            batch_size, target_num, mixup_num, -1
+        )
+        mixed = lamda.unsqueeze(-1).to(device).to(mixed.dtype) * mixed
+
+        mixed_outputs = mixed_outputs.scatter(
+            1, indices, mixed.view(batch_size, -1, emb_size)
+        )
+
+        outer_for_end = time.time()
+
+        # print(f"outer_for: {(outer_for_end - outer_for_start) * 1000:.2f} ms")
+        # print(f"inner_for: {(inner_for_end - inner_for_start) * 1000:.2f} ms")
+
         if flow_mixup_enabled:
-            outputs = model((outputs, *others), **output_opts)[0]
+            outputs = model((outputs, *others), pass_attn=True)[0]
             loss = criterion(outputs, batch_y)
         else:
             loss = 0
+            flow_alpha = 1.0
 
-        mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
-        loss = loss + criterion(mixed_outputs, mixed_batch_y)
+        forward_start = time.time()
+        mixed_outputs = model((mixed_outputs, *others), pass_attn=True)[0]
+        forward_end = time.time()
 
+        # print(f"forward: {(forward_end - forward_start) * 1000:.2f} ms")
+
+        loss_start = time.time()
+        loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
+        loss_end = time.time()
+
+        # print(f"loss: {(loss_end - loss_start) * 1000:.2f} ms")
+
+    with_end = time.time()
+
+    # print(f"with: {(with_end - with_start) * 1000:.2f} ms")
+
+    optim_start = time.time()
     optim.zero_grad()
-    scaler.scale(loss).backward()
+
+    loss = scaler.scale(loss)
+
+    backward_start = time.time()
+    loss.backward()
+    backward_end = time.time()
+
+    # print(f"backward: {(backward_end - backward_start) * 1000:.2f} ms")
+
     clip_gradient(model, gradient_norm_queue, gradient_clip_value)
     scaler.step(optim)
     scaler.update()
+    optim_end = time.time()
+
+    # print(list(model.parameters())[2])
+    # print(f"optim: {(optim_end - optim_start) * 1000:.2f} ms")
 
     return loss.item()
 
@@ -717,6 +839,11 @@ def get_optimizer(
     default="train",
     help="train: train and eval are executed. eval: eval only",
 )
+@click.option(
+    "--eval-ckpt-path",
+    type=click.Path(exists=True),
+    help="ckpt path to be evaludated. Only available eval mode",
+)
 @click.option("--test-run", is_flag=True, default=False, help="Test run mode for debug")
 @click.option(
     "--run-script", type=click.Path(exists=True), help="Run script file path to log"
@@ -758,6 +885,7 @@ def get_optimizer(
     default="n5",
     help="Early stopping criterion",
 )
+@click.option("--reset-best", is_flag=True, default=False, help="Reset best")
 @click.option(
     "--num-epochs", type=click.INT, default=200, help="Total number of epochs"
 )
@@ -800,6 +928,17 @@ def get_optimizer(
     help="Enable mixup",
 )
 @click.option(
+    "--mixup-lr",
+    type=click.FLOAT,
+    help="Learning rate for mixup",
+)
+@click.option(
+    "--mixup-type",
+    type=click.Choice(["word", "inplace", "inplace2"]),
+    default="inplace2",
+    help="Type of Mixup",
+)
+@click.option(
     "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
 )
 @click.option(
@@ -810,15 +949,6 @@ def get_optimizer(
 )
 @click.option("--mixup-num", type=click.INT, default=2, help="# of samples to be mixed")
 @click.option(
-    "--in-place-enabled", is_flag=True, default=False, help="Enable in-place mixup"
-)
-@click.option(
-    "--in-place-ver",
-    type=click.IntRange(1, 2),
-    default=1,
-    help="version of in-place mixup",
-)
-@click.option(
     "--in-place-target-num",
     type=click.INT,
     default=3,
@@ -828,11 +958,15 @@ def get_optimizer(
     "--flow-mixup-enabled", is_flag=True, default=False, help="Enable flow mixup"
 )
 @click.option(
+    "--flow-alpha", type=click.FLOAT, default=1.0, help="ratio of loss of mixed data"
+)
+@click.option(
     "--no-label-smoothing", is_flag=True, default=False, help="No label smoothing"
 )
 @log_elapsed_time
 def main(
     mode: str,
+    eval_ckpt_path: str,
     test_run: bool,
     run_script: str,
     seed: int,
@@ -846,6 +980,7 @@ def main(
     print_step: int,
     early: int,
     early_criterion: str,
+    reset_best: bool,
     num_epochs: int,
     train_batch_size: int,
     test_batch_size: int,
@@ -858,13 +993,14 @@ def main(
     resume_ckpt_path: str,
     gradient_max_norm: float,
     mixup_enabled: bool,
+    mixup_lr: float,
+    mixup_type: str,
     mixup_alpha: float,
     mixup_warmup: int,
     mixup_num: int,
-    in_place_enabled: bool,
-    in_place_ver: int,
     in_place_target_num: int,
     flow_mixup_enabled: bool,
+    flow_alpha: float,
     no_label_smoothing: bool,
 ):
     ################################ Assert options ##################################
@@ -891,12 +1027,20 @@ def main(
 
     os.makedirs(ckpt_root_path, exist_ok=True)
 
-    if not resume and os.path.exists(ckpt_path) and mode == "train":
+    if (
+        (not resume or resume_ckpt_path)
+        and os.path.exists(ckpt_path)
+        and mode == "train"
+    ):
         click.confirm(
-            "Checkpoint is already existed. Overwrite it?", abort=True, err=True
+            f"Checkpoint is already existed. ({ckpt_path})\nOverwrite it?",
+            abort=True,
+            err=True,
         )
-        shutil.rmtree(ckpt_root_path)
-        os.makedirs(ckpt_root_path, exist_ok=True)
+
+        if not resume_ckpt_path:
+            shutil.rmtree(ckpt_root_path)
+            os.makedirs(ckpt_root_path, exist_ok=True)
 
     if not test_run and mode == "train":
         set_logger(os.path.join(ckpt_root_path, log_filename))
@@ -930,7 +1074,7 @@ def main(
     mlb = get_mlb(train_dataset.le_path)
     num_labels = len(mlb.classes_)
 
-    if in_place_ver == 2:
+    if mixup_enabled and mixup_type == "inplace2":
         adj = lil_matrix(train_dataset.y.T @ train_dataset.y)
         adj.setdiag(0)
         adj = adj.tocsr()
@@ -1005,7 +1149,7 @@ def main(
             global_step = ckpt["global_step"]
             gradient_norm_queue = ckpt["gradient_norm_queue"]
             model_swa_state = ckpt["model_swa_state"]
-            best = ckpt["best"]
+            best = ckpt["best"] if not reset_best else 0
             e = ckpt["e"]
 
         else:
@@ -1031,11 +1175,6 @@ def main(
     logger.info(f"checkpoint name: {os.path.basename(ckpt_name)}")
 
     ##################################### Training ###################################
-    if mixup_enabled:
-        mixup_fn = MixUp(mixup_alpha)
-    else:
-        mixup_fn = None
-
     input_opts = model_cnf["train"]["input_opts"]
     output_opts = model_cnf["train"]["output_opts"]
 
@@ -1053,6 +1192,10 @@ def main(
                     logger.info("Start Mixup")
                     mixup_ckpt_path, ext = os.path.splitext(ckpt_path)
                     mixup_ckpt_path += "_before_mixup" + ext
+
+                    if reset_best:
+                        best = 0
+
                     save_checkpoint2(
                         mixup_ckpt_path,
                         epoch,
@@ -1073,49 +1216,73 @@ def main(
                         },
                     )
 
+                    if mixup_lr is not None:
+                        set_lr(optimizer, mixup_lr)
+
+                if resume and mixup_enabled and epoch == mixup_warmup + 1:
+                    logger.info("Start Mixup")
+
+                    if mixup_lr is not None:
+                        set_lr(optimizer, mixup_lr)
+
                 for i, (batch_x, batch_y) in enumerate(train_dataloader, 1):
                     if epoch >= mixup_warmup and mixup_enabled:
-                        if in_place_enabled:
-                            if in_place_ver == 1:
-                                train_loss = train_in_place_mixup_step(
-                                    model,
-                                    criterion,
-                                    batch_x,
-                                    batch_y,
-                                    scaler,
-                                    optimizer,
-                                    mixup_num,
-                                    mixup_alpha,
-                                    flow_mixup_enabled,
-                                    no_label_smoothing,
-                                    input_opts,
-                                    output_opts,
-                                    inv_w,
-                                    gradient_max_norm,
-                                    gradient_norm_queue,
-                                    device,
-                                )
-                            else:
-                                train_loss = train_in_place_mixup_step_v2(
-                                    model,
-                                    criterion,
-                                    batch_x,
-                                    batch_y,
-                                    scaler,
-                                    optimizer,
-                                    mixup_num,
-                                    mixup_alpha,
-                                    in_place_target_num,
-                                    adj,
-                                    flow_mixup_enabled,
-                                    no_label_smoothing,
-                                    input_opts,
-                                    output_opts,
-                                    inv_w,
-                                    gradient_max_norm,
-                                    gradient_norm_queue,
-                                    device,
-                                )
+                        if mixup_type == "word":
+                            train_loss = train_word_mixup_step(
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                mixup_alpha,
+                                flow_mixup_enabled,
+                                flow_alpha,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
+                        elif mixup_type == "inplace":
+                            train_loss = train_in_place_mixup_step(
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                mixup_num,
+                                mixup_alpha,
+                                flow_mixup_enabled,
+                                flow_alpha,
+                                no_label_smoothing,
+                                inv_w,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
+                        elif mixup_type == "inplace2":
+                            step_start = time.time()
+                            train_loss = train_in_place_mixup_step_v2(
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                mixup_num,
+                                mixup_alpha,
+                                in_place_target_num,
+                                adj,
+                                flow_mixup_enabled,
+                                flow_alpha,
+                                no_label_smoothing,
+                                inv_w,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
+                            step_end = time.time()
+                            # print(f"step: {(step_end - step_start) * 1000:.2f} ms")
                         else:
                             train_loss = train_mixup_step(
                                 model,
@@ -1136,6 +1303,7 @@ def main(
                                 device,
                             )
                     else:
+                        step_start = time.time()
                         train_loss = train_step(
                             model,
                             criterion,
@@ -1147,6 +1315,8 @@ def main(
                             gradient_norm_queue=gradient_norm_queue,
                             device=device,
                         )
+                        step_end = time.time()
+                        # print(f"step: {(step_end - step_start) * 1000:.2f} ms")
 
                     if scheduler is not None:
                         scheduler.step()
@@ -1159,6 +1329,9 @@ def main(
                     if global_step % eval_step == 0 or (
                         epoch == num_epochs - 1 and i == len(train_dataloader)
                     ):
+                        swa_step(model, model_swa_state)
+                        swap_swa_params(model, model_swa_state)
+
                         results = get_results(
                             model,
                             valid_dataloader,
@@ -1203,7 +1376,6 @@ def main(
                         else:
                             e += 1
 
-                        swa_step(model, model_swa_state)
                         swap_swa_params(model, model_swa_state)
 
                     if (
@@ -1249,6 +1421,9 @@ def main(
     ################################### Evaluation ###################################
     logger.info("Evaluation.")
 
+    if mode == "eval" and eval_ckpt_path is not None:
+        ckpt_path = eval_ckpt_path
+
     if os.path.exists(ckpt_path):
         load_checkpoint2(ckpt_path, [model], set_rng_state=False)
 
@@ -1267,7 +1442,7 @@ def main(
         f"\np@1,3,5,10: {results['p1']:.4f}, {results['p3']:.4f}, {results['p5']:.4f}, {results['p10']:.4f}"
         f"\nn@1,3,5,10: {results['n1']:.4f}, {results['n3']:.4f}, {results['n5']:.4f}, {results['n10']:.4f}"
         f"\npsp@1,3,5,10,20: {results['psp1']:.4f}, {results['psp3']:.4f}, {results['psp5']:.4f}, {results['psp10']:.4f}, {results['psp20']:.4f}"
-        f"\npsn@1,3,5,10: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}, {results['psn10']:.4f}"
+        f"\npsn@1,3,5,10,20: {results['psn1']:.4f}, {results['psn3']:.4f}, {results['psn5']:.4f}, {results['psn10']:.4f}, {results['psn20']:.4f}"
         # f"\nr@1,5,10: {results['r1']:.4f}, {results['r5']:.4f}, {results['r10']:.4f}"
         f"\navg.rank: {results['avg.rank']:.2f} "
         f"\ncoverage: {results['coverage']:.2f}"

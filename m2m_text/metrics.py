@@ -144,12 +144,13 @@ def get_precision_results2(
             psp3 = get_psp_3(prediction, targets, inv_w, mlb)
             psp5 = get_psp_5(prediction, targets, inv_w, mlb)
             psp10 = get_psp_10(prediction, targets, inv_w, mlb)
-            psp20 = get_psp(prediction, targets, inv_w, mlb, top=20)
+            psp20 = get_psp_20(prediction, targets, inv_w, mlb)
 
             psn1 = get_psndcg_1(prediction, targets, inv_w, mlb)
             psn3 = get_psndcg_3(prediction, targets, inv_w, mlb)
             psn5 = get_psndcg_5(prediction, targets, inv_w, mlb)
             psn10 = get_psndcg_10(prediction, targets, inv_w, mlb)
+            psn20 = get_psndcg_20(prediction, targets, inv_w, mlb)
 
             ret = {
                 **ret,
@@ -162,6 +163,7 @@ def get_precision_results2(
                 "psn3": psn3,
                 "psn5": psn5,
                 "psn10": psn10,
+                "psn20": psn20,
             }
 
     return ret
@@ -231,6 +233,7 @@ get_psp_1 = partial(get_psp, top=1)
 get_psp_3 = partial(get_psp, top=3)
 get_psp_5 = partial(get_psp, top=5)
 get_psp_10 = partial(get_psp, top=10)
+get_psp_20 = partial(get_psp, top=20)
 
 
 def get_psndcg(
@@ -256,6 +259,7 @@ get_psndcg_1 = partial(get_psndcg, top=1)
 get_psndcg_3 = partial(get_psndcg, top=3)
 get_psndcg_5 = partial(get_psndcg, top=5)
 get_psndcg_10 = partial(get_psndcg, top=10)
+get_psndcg_20 = partial(get_psndcg, top=20)
 
 
 def get_recall(

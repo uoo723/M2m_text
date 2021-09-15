@@ -1,6 +1,6 @@
 name: AmazonCat13K
 
-valid_size: 0.2
+valid_size: 0.01
 
 dataset:
   maxlen: 300
@@ -9,3 +9,4 @@ dataset:
 
 model:
   emb_init: data/AmazonCat13K/emb_init.npy
+  seq_len: 300
