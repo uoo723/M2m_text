@@ -11,7 +11,7 @@ import time
 import warnings
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import click
 import numpy as np
@@ -208,6 +208,8 @@ def set_lr(optim: Optimizer, lr: float) -> None:
 
 
 def train_step(
+    global_step: int,
+    accumulation_step: int,
     model: nn.Module,
     criterion: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -223,17 +225,21 @@ def train_step(
     with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
         outputs = model(to_device(batch_x, device))[0]
         loss = criterion(outputs, to_device(batch_y, device))
+        loss = loss / accumulation_step
 
     optim_start = time.time()
-    optim.zero_grad()
 
     loss = scaler.scale(loss)
     loss.backward()
 
-    scaler.unscale_(optim)
-    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
-    scaler.step(optim)
-    scaler.update()
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
+
     optim_end = time.time()
 
     # print(f"optim: {(optim_end - optim_start) * 1000:.2f} ms")
@@ -242,6 +248,8 @@ def train_step(
 
 
 def train_mixup_step(
+    global_step: int,
+    accumulation_step: int,
     model: nn.Module,
     criterion: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -366,20 +374,25 @@ def train_mixup_step(
 
         mixed_outputs = model((mixed_outputs, *others), **output_opts)[0]
         loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
-
-    optim.zero_grad()
+        loss = loss / accumulation_step
 
     loss = scaler.scale(loss)
     loss.backward()
 
-    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
-    scaler.step(optim)
-    scaler.update()
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
 
     return loss.item()
 
 
 def train_word_mixup_step(
+    global_step: int,
+    accumulation_step: int,
     model: nn.Module,
     criterion: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -422,20 +435,25 @@ def train_word_mixup_step(
 
         mixed_outputs = model((mixed_outputs, *others), pass_emb=True)[0]
         loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
-
-    optim.zero_grad()
+        loss = loss / accumulation_step
 
     loss = scaler.scale(loss)
     loss.backward()
 
-    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
-    scaler.step(optim)
-    scaler.update()
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
 
     return loss.item()
 
 
 def train_in_place_mixup_step(
+    global_step: int,
+    accumulation_step: int,
     model: nn.Module,
     criterion: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -527,19 +545,25 @@ def train_in_place_mixup_step(
             mixed_outputs = model((mixed_outputs, *others), pass_attn=True)[0]
             loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
 
-    optim.zero_grad()
+        loss = loss / accumulation_step
 
     loss = scaler.scale(loss)
     loss.backward()
 
-    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
-    scaler.step(optim)
-    scaler.update()
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
 
     return loss.item()
 
 
 def train_in_place_mixup_step_v2(
+    global_step: int,
+    accumulation_step: int,
     model: nn.Module,
     criterion: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -607,9 +631,11 @@ def train_in_place_mixup_step_v2(
                 labels[i, j, 1 : n + 1] = torch.from_numpy(selected_neigh)
                 masks[i, j, : n + 1] = True
 
-                lam = torch.distributions.Dirichlet(
-                    torch.tensor([mixup_alpha] * (n + 1))
-                ).sample().sort()[0]
+                lam = (
+                    torch.distributions.Dirichlet(torch.tensor([mixup_alpha] * (n + 1)))
+                    .sample()
+                    .sort()[0]
+                )
 
                 lamda[i, j, : n + 1] = lam
 
@@ -662,6 +688,7 @@ def train_in_place_mixup_step_v2(
 
         loss_start = time.time()
         loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
+        loss = loss / accumulation_step
         loss_end = time.time()
 
         # print(f"loss: {(loss_end - loss_start) * 1000:.2f} ms")
@@ -671,7 +698,6 @@ def train_in_place_mixup_step_v2(
     # print(f"with: {(with_end - with_start) * 1000:.2f} ms")
 
     optim_start = time.time()
-    optim.zero_grad()
 
     loss = scaler.scale(loss)
 
@@ -681,9 +707,14 @@ def train_in_place_mixup_step_v2(
 
     # print(f"backward: {(backward_end - backward_start) * 1000:.2f} ms")
 
-    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
-    scaler.step(optim)
-    scaler.update()
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
+
     optim_end = time.time()
 
     # print(list(model.parameters())[2])
@@ -861,6 +892,12 @@ def get_optimizer(
 )
 @click.option("--ckpt-name", type=click.STRING, help="Checkpoint name")
 @click.option(
+    "--ckpt-epoch",
+    type=click.INT,
+    multiple=True,
+    help="Specify epoch for save checkpoints",
+)
+@click.option(
     "--mp-enabled", is_flag=True, default=False, help="Enable Mixed Precision"
 )
 @click.option(
@@ -907,6 +944,12 @@ def get_optimizer(
 )
 @click.option(
     "--lr", type=click.FLOAT, default=1e-3, help="learning rate (Base Encoder)"
+)
+@click.option(
+    "--accumulation-step",
+    type=click.INT,
+    default=1,
+    help="accumlation step for small batch size",
 )
 @click.option(
     "--enable-loss-weight",
@@ -974,6 +1017,7 @@ def main(
     data_cnf: str,
     ckpt_root_path: str,
     ckpt_name: str,
+    ckpt_epoch: List[int],
     mp_enabled: bool,
     swa_warmup: int,
     eval_step: int,
@@ -988,6 +1032,7 @@ def main(
     num_workers: int,
     decay: float,
     lr: float,
+    accumulation_step: int,
     enable_loss_weight: bool,
     resume: bool,
     resume_ckpt_path: str,
@@ -1177,6 +1222,7 @@ def main(
     ##################################### Training ###################################
     input_opts = model_cnf["train"]["input_opts"]
     output_opts = model_cnf["train"]["output_opts"]
+    results = None
 
     if mode == "train":
         try:
@@ -1229,6 +1275,8 @@ def main(
                     if epoch >= mixup_warmup and mixup_enabled:
                         if mixup_type == "word":
                             train_loss = train_word_mixup_step(
+                                global_step,
+                                accumulation_step,
                                 model,
                                 criterion,
                                 batch_x,
@@ -1244,6 +1292,8 @@ def main(
                             )
                         elif mixup_type == "inplace":
                             train_loss = train_in_place_mixup_step(
+                                global_step,
+                                accumulation_step,
                                 model,
                                 criterion,
                                 batch_x,
@@ -1263,6 +1313,8 @@ def main(
                         elif mixup_type == "inplace2":
                             step_start = time.time()
                             train_loss = train_in_place_mixup_step_v2(
+                                global_step,
+                                accumulation_step,
                                 model,
                                 criterion,
                                 batch_x,
@@ -1285,6 +1337,8 @@ def main(
                             # print(f"step: {(step_end - step_start) * 1000:.2f} ms")
                         else:
                             train_loss = train_mixup_step(
+                                global_step,
+                                accumulation_step,
                                 model,
                                 criterion,
                                 batch_x,
@@ -1305,6 +1359,8 @@ def main(
                     else:
                         step_start = time.time()
                         train_loss = train_step(
+                            global_step,
+                            accumulation_step,
                             model,
                             criterion,
                             batch_x,
@@ -1393,6 +1449,29 @@ def main(
                         if early is not None and e > early:
                             early_stop = True
                             break
+
+                if ckpt_epoch is not None and epoch in ckpt_epoch:
+                    ckpt_epoch_path = os.path.join(ckpt_root_path, f"ckpt.{epoch}.pt")
+                    save_checkpoint2(
+                        ckpt_epoch_path,
+                        epoch,
+                        [model],
+                        optim=optimizer,
+                        scaler=scaler,
+                        scheduler=scheduler,
+                        results=results,
+                        other_states={
+                            "best": best,
+                            "train_ids": train_ids,
+                            "valid_ids": valid_ids,
+                            "model_swa_state": model_swa_state,
+                            "global_step": global_step,
+                            "early_criterion": early_criterion,
+                            "gradient_norm_queue": gradient_norm_queue,
+                            "e": e,
+                        },
+                    )
+
 
         except KeyboardInterrupt:
             logger.info("Interrupt training.")

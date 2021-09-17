@@ -28,7 +28,7 @@ args=(
     # --le-lr 1e-5
     --train-batch-size 128
     --test-batch-size 256
-    --ckpt-name cluster_dynamic_cluster_v2_fr
+    --ckpt-name cluster_dynamic_cluster_v2
     # --ckpt-name euclidean
     --early-criterion 'n5'
     --seed $1
