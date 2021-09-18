@@ -554,6 +554,7 @@ class LaRoberta(RobertaPreTrainedModel):
         return_attn=False,
         pass_attn=False,
         outputs=None,
+        return_attention_score=False,
         mp_enabled: Optional[bool] = None,
     ):
         r"""
@@ -608,15 +609,21 @@ class LaRoberta(RobertaPreTrainedModel):
 
             if attn_out is None:
                 attn_out = self.attention(
-                    sequence_output, attention_mask.bool()
+                    sequence_output,
+                    attention_mask.bool(),
+                    return_attention_score,
                 )  # N, labels_num, hidden_size
 
             if return_attn:
-                return (attn_out,)
+                return attn_out if type(attn_out) == tuple else (attn_out,)
 
             # attn_out = self.batch_m2(attn_out)
 
-            logits = self.linear(attn_out)
+            logits = (
+                self.linear(attn_out[0])
+                if type(attn_out) == tuple
+                else self.linear(attn_out)
+            )
 
             loss = None
             if labels is not None:
@@ -630,6 +637,9 @@ class LaRoberta(RobertaPreTrainedModel):
 
         if not return_dict:
             output = (logits,)
+            if return_attention_score and type(attn_out) == tuple:
+                output += (attn_out[1],)
+
             return ((loss,) + output) if loss is not None else output
 
         return SequenceClassifierOutput(

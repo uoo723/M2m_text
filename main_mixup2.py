@@ -6,6 +6,7 @@ Instace Anchor new version, no cluster
 """
 import copy
 import os
+import re
 import shutil
 import time
 import warnings
@@ -828,37 +829,71 @@ def get_optimizer(
     model: nn.Module,
     lr: float,
     decay: float,
+    classifier_lr: float = None,
+    classifier_decay: float = None,
 ) -> Optimizer:
     no_decay = ["bias", "LayerNorm.weight"]
-    models = [model]
-    lr_list = [lr]
-    decay_list = [decay]
+
+    if classifier_lr is None:
+        classifier_lr = lr
+
+    if classifier_decay is None:
+        classifier_decay = decay
 
     param_groups = [
-        (
-            {
-                "params": [
-                    p
-                    for n, p in model.named_parameters()
-                    if not any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": decay,
-                "lr": lr,
-            },
-            {
-                "params": [
-                    p
-                    for n, p in model.named_parameters()
-                    if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-                "lr": lr,
-            },
-        )
-        for model, lr, decay in zip(models, lr_list, decay_list)
+        {
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if not any(nd in n for nd in no_decay)
+                and not (
+                    re.match(r"^(module\.)?attention", n)
+                    or re.match(r"^(module\.)?linear", n)
+                )
+            ],
+            "weight_decay": decay,
+            "lr": lr,
+        },
+        {
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if any(nd in n for nd in no_decay)
+                and not (
+                    re.match(r"^(module\.)?attention", n)
+                    or re.match(r"^(module\.)?linear", n)
+                )
+            ],
+            "weight_decay": 0.0,
+            "lr": lr,
+        },
+        {
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if not any(nd in n for nd in no_decay)
+                and (
+                    re.match(r"^(module\.)?attention", n)
+                    or re.match(r"^(module\.)?linear", n)
+                )
+            ],
+            "weight_decay": classifier_decay,
+            "lr": classifier_lr,
+        },
+        {
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if any(nd in n for nd in no_decay)
+                and (
+                    re.match(r"^(module\.)?attention", n)
+                    or re.match(r"^(module\.)?linear", n)
+                )
+            ],
+            "weight_decay": 0.0,
+            "lr": classifier_lr,
+        },
     ]
-
-    param_groups = [p for m_param_groups in param_groups for p in m_param_groups]
 
     return DenseSparseAdamW(param_groups)
 
@@ -895,7 +930,12 @@ def get_optimizer(
     "--ckpt-epoch",
     type=click.INT,
     multiple=True,
-    help="Specify epoch for save checkpoints",
+    help="Specify epoch for saving checkpoints",
+)
+@click.option(
+    "--ckpt-save-interval",
+    type=click.INT,
+    help="Set checkpoint saving interval based on epoch",
 )
 @click.option(
     "--mp-enabled", is_flag=True, default=False, help="Enable Mixed Precision"
@@ -946,6 +986,16 @@ def get_optimizer(
     "--lr", type=click.FLOAT, default=1e-3, help="learning rate (Base Encoder)"
 )
 @click.option(
+    "--classifier-lr",
+    type=click.FLOAT,
+    help="learning rate for classifier",
+)
+@click.option(
+    "--classifier-decay",
+    type=click.FLOAT,
+    help="weight decay for classifier",
+)
+@click.option(
     "--accumulation-step",
     type=click.INT,
     default=1,
@@ -977,7 +1027,7 @@ def get_optimizer(
 )
 @click.option(
     "--mixup-type",
-    type=click.Choice(["word", "inplace", "inplace2"]),
+    type=click.Choice(["word", "inplace", "inplace2", "ssmix"]),
     default="inplace2",
     help="Type of Mixup",
 )
@@ -1018,6 +1068,7 @@ def main(
     ckpt_root_path: str,
     ckpt_name: str,
     ckpt_epoch: List[int],
+    ckpt_save_interval: int,
     mp_enabled: bool,
     swa_warmup: int,
     eval_step: int,
@@ -1032,6 +1083,8 @@ def main(
     num_workers: int,
     decay: float,
     lr: float,
+    classifier_lr: float,
+    classifier_decay: float,
     accumulation_step: int,
     enable_loss_weight: bool,
     resume: bool,
@@ -1148,7 +1201,7 @@ def main(
     ##################################################################################
 
     ############################### Prepare Training #################################
-    optimizer = get_optimizer(model, lr, decay)
+    optimizer = get_optimizer(model, lr, decay, classifier_lr, classifier_decay)
 
     scheduler = None
     scaler = GradScaler(enabled=mp_enabled)
@@ -1472,6 +1525,31 @@ def main(
                         },
                     )
 
+                if (
+                    ckpt_save_interval is not None
+                    and (epoch + 1) % ckpt_save_interval == 0
+                ):
+                    ckpt_epoch_path = os.path.join(ckpt_root_path, f"ckpt.{epoch}.pt")
+                    if not os.path.exists(ckpt_epoch_path):
+                        save_checkpoint2(
+                            ckpt_epoch_path,
+                            epoch,
+                            [model],
+                            optim=optimizer,
+                            scaler=scaler,
+                            scheduler=scheduler,
+                            results=results,
+                            other_states={
+                                "best": best,
+                                "train_ids": train_ids,
+                                "valid_ids": valid_ids,
+                                "model_swa_state": model_swa_state,
+                                "global_step": global_step,
+                                "early_criterion": early_criterion,
+                                "gradient_norm_queue": gradient_norm_queue,
+                                "e": e,
+                            },
+                        )
 
         except KeyboardInterrupt:
             logger.info("Interrupt training.")
