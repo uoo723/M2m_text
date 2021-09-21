@@ -2,6 +2,7 @@ torch==1.7.1
 numpy==1.19.2
 tqdm==4.54.1
 click==7.1.2
+click-option-group==0.5.3
 logzero==1.6.3
 scikit-learn==0.24.1
 ruamel.yaml==0.16.12

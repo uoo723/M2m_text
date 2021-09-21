@@ -5,6 +5,7 @@ Created on 2021/07/06
 Instace Anchor new version, no cluster
 """
 import copy
+from m2m_text.utils.ssmix import get_loss, split_batch, ssmix_augment
 import os
 import re
 import shutil
@@ -28,6 +29,7 @@ from torch.optim import Optimizer
 from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
+from click_option_group import optgroup
 
 from m2m_text.datasets import (
     AmazonCat,
@@ -48,7 +50,7 @@ from m2m_text.metrics import (
     get_psp_5,
     get_r_10,
 )
-from m2m_text.networks import AttentionRNN, LaCNN, LaRoberta
+from m2m_text.networks import AttentionRNN, LaCNN, LaRoberta, LaRoberta4Mix
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
 from m2m_text.utils.mixup import mixup
@@ -76,10 +78,12 @@ DATASET_CLS = {
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
     "LaRoberta": LaRoberta,
+    "LaRoberta4Mix": LaRoberta4Mix,
     "LaCNN": LaCNN,
 }
 
-TRANSFORMER_MODELS = ["LaRoberta"]
+TRANSFORMER_MODELS = ["LaRoberta", "LaRoberta4Mix"]
+MIX_MODELS = ["LaRoberta4Mix"]
 
 
 def get_model(
@@ -203,9 +207,11 @@ def get_dataloader(
     return train_dataloader, valid_dataloader, test_dataloader
 
 
-def set_lr(optim: Optimizer, lr: float) -> None:
+def set_lr(optim: Optimizer, lr: float, decay: float = None) -> None:
     for p in optim.param_groups:
         p["lr"] = lr
+        if decay is not None and ["weight_decay"] != 0:
+            p["weight_decay"] = decay
 
 
 def train_step(
@@ -590,6 +596,8 @@ def train_in_place_mixup_step_v2(
     batch_x = to_device(batch_x, device)
     batch_y = to_device(batch_y, device)
 
+    losses = []
+
     with_start = time.time()
     with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
         outputs = model(batch_x, return_attn=True)
@@ -676,10 +684,7 @@ def train_in_place_mixup_step_v2(
 
         if flow_mixup_enabled:
             outputs = model((outputs, *others), pass_attn=True)[0]
-            loss = criterion(outputs, batch_y)
-        else:
-            loss = 0
-            flow_alpha = 1.0
+            losses.append(flow_alpha * criterion(outputs, batch_y))
 
         forward_start = time.time()
         mixed_outputs = model((mixed_outputs, *others), pass_attn=True)[0]
@@ -688,7 +693,8 @@ def train_in_place_mixup_step_v2(
         # print(f"forward: {(forward_end - forward_start) * 1000:.2f} ms")
 
         loss_start = time.time()
-        loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
+        losses.append(criterion(mixed_outputs, mixed_batch_y))
+        loss = torch.stack(losses).mean()
         loss = loss / accumulation_step
         loss_end = time.time()
 
@@ -720,6 +726,88 @@ def train_in_place_mixup_step_v2(
 
     # print(list(model.parameters())[2])
     # print(f"optim: {(optim_end - optim_start) * 1000:.2f} ms")
+
+    return loss.item()
+
+
+def train_ssmix_step(
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    batch_y: torch.Tensor,
+    scaler: GradScaler,
+    optim: Optimizer,
+    ss_winsize: float,
+    naive_augment: bool = False,
+    gradient_clip_value: Optional[float] = None,
+    gradient_norm_queue: Optional[deque] = None,
+    device: torch.device = torch.device("cpu"),
+) -> Optional[float]:
+    model.train()
+
+    batch_x = to_device(batch_x, device)
+    batch_y = to_device(batch_y, device)
+
+    inputs_left, targets_left, inputs_right, targets_right = split_batch(
+        batch_x, batch_y
+    )
+
+    # Skip odd-numbered batch
+    if inputs_left is None:
+        return 0
+
+    losses = []
+    with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+        if not naive_augment:
+            losses.append(get_loss(model, criterion, inputs_left, targets_left))
+            losses.append(get_loss(model, criterion, inputs_right, targets_right))
+
+        inputs_aug_left, ratio_left = ssmix_augment(
+            model,
+            criterion,
+            inputs_left,
+            inputs_right,
+            targets_left,
+            targets_right,
+            ss_winsize,
+        )
+        inputs_aug_right, ratio_right = ssmix_augment(
+            model,
+            criterion,
+            inputs_right,
+            inputs_left,
+            targets_right,
+            targets_left,
+            ss_winsize,
+        )
+
+        losses.append(
+            get_loss(
+                model,
+                criterion,
+                inputs_aug_left,
+                targets_left,
+                targets_right,
+                ratio_left,
+            )
+        )
+        losses.append(
+            get_loss(
+                model,
+                criterion,
+                inputs_aug_right,
+                targets_right,
+                targets_left,
+                ratio_right,
+            )
+        )
+
+    loss = scaler.scale(torch.stack(losses).mean())
+    loss.backward()
+    scaler.unscale_(optim)
+    clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+    scaler.step(optim)
+    optim.zero_grad()
 
     return loss.item()
 
@@ -1014,47 +1102,79 @@ def get_optimizer(
     type=click.FLOAT,
     help="max norm for gradient clipping",
 )
-@click.option(
+@optgroup.group("Common Mixup options")
+@optgroup.option(
     "--mixup-enabled",
     is_flag=True,
     default=False,
     help="Enable mixup",
 )
-@click.option(
+@optgroup.option(
     "--mixup-lr",
     type=click.FLOAT,
     help="Learning rate for mixup",
 )
-@click.option(
+@optgroup.option(
+    "--mixup-decay",
+    type=click.FLOAT,
+    help="Weight decay for mixup",
+)
+@optgroup.option(
     "--mixup-type",
     type=click.Choice(["word", "inplace", "inplace2", "ssmix"]),
     default="inplace2",
     help="Type of Mixup",
 )
-@click.option(
+@optgroup.option(
     "--mixup-alpha", type=click.FLOAT, default=0.4, help="Hyper parameter for mixup"
 )
-@click.option(
+@optgroup.option(
     "--mixup-warmup",
     type=click.INT,
     default=20,
     help="Deferred stragtegy for mixup. Disable: -1",
 )
-@click.option("--mixup-num", type=click.INT, default=2, help="# of samples to be mixed")
-@click.option(
+@optgroup.option(
+    "--no-label-smoothing", is_flag=True, default=False, help="No label smoothing"
+)
+@optgroup.option(
+    "--mixup-num", type=click.INT, default=2, help="# of samples to be mixed"
+)
+@optgroup.group("in-place mixup options")
+@optgroup.option(
     "--in-place-target-num",
     type=click.INT,
     default=3,
     help="# of target for in-place mixup v2",
 )
-@click.option(
+@optgroup.group("ssmix options")
+@optgroup.option(
+    "--ss-winsize",
+    type=click.FloatRange(0, 1),
+    default=0.1,
+    help="Percent of window size for augmentation",
+)
+@optgroup.option(
+    "--ss-no-saliency",
+    is_flag=True,
+    default=False,
+    help="Excluding saliency constraint in SSMix",
+)
+@optgroup.option(
+    "--ss-no-span",
+    is_flag=True,
+    default=False,
+    help="Excluding span constraint in SSMix",
+)
+@optgroup.option(
+    "--naive-augment", is_flag=True, default=False, help="Augment without original data"
+)
+@optgroup.group("flow mixup options")
+@optgroup.option(
     "--flow-mixup-enabled", is_flag=True, default=False, help="Enable flow mixup"
 )
-@click.option(
+@optgroup.option(
     "--flow-alpha", type=click.FLOAT, default=1.0, help="ratio of loss of mixed data"
-)
-@click.option(
-    "--no-label-smoothing", is_flag=True, default=False, help="No label smoothing"
 )
 @log_elapsed_time
 def main(
@@ -1092,19 +1212,20 @@ def main(
     gradient_max_norm: float,
     mixup_enabled: bool,
     mixup_lr: float,
+    mixup_decay: float,
     mixup_type: str,
     mixup_alpha: float,
     mixup_warmup: int,
+    no_label_smoothing: bool,
     mixup_num: int,
     in_place_target_num: int,
+    ss_winsize: float,
+    ss_no_saliency: bool,
+    ss_no_span: bool,
+    naive_augment: bool,
     flow_mixup_enabled: bool,
     flow_alpha: float,
-    no_label_smoothing: bool,
 ):
-    ################################ Assert options ##################################
-    ##################################################################################
-
-    ################################ Initialize Config ###############################
     yaml = YAML(typ="safe")
 
     model_cnf_path = model_cnf
@@ -1116,6 +1237,14 @@ def main(
     model_name = model_cnf["name"]
     dataset_name = data_cnf["name"]
 
+    ################################ Assert options ##################################
+    if mixup_type == "ssmix":
+        assert accumulation_step == 1, "ssmix does not support gradient accumulation"
+        assert not mp_enabled, "ssmix does not support mixed precision"
+        assert model_name in MIX_MODELS
+    ##################################################################################
+
+    ################################ Initialize Config ###############################
     prefix = "" if ckpt_name is None else f"{ckpt_name}_"
     ckpt_name = f"{prefix}{model_name}_{dataset_name}_{seed}"
     ckpt_root_path = os.path.join(ckpt_root_path, ckpt_name)
@@ -1235,9 +1364,9 @@ def main(
             start_epoch, ckpt = load_checkpoint2(
                 resume_ckpt_path,
                 [model],
-                optimizer,
-                scaler,
-                scheduler,
+                # optim=optimizer,
+                scaler=scaler,
+                scheduler=scheduler,
                 set_rng_state=True,
                 return_other_states=True,
             )
@@ -1316,13 +1445,13 @@ def main(
                     )
 
                     if mixup_lr is not None:
-                        set_lr(optimizer, mixup_lr)
+                        set_lr(optimizer, mixup_lr, mixup_decay)
 
                 if resume and mixup_enabled and epoch == mixup_warmup + 1:
                     logger.info("Start Mixup")
 
                     if mixup_lr is not None:
-                        set_lr(optimizer, mixup_lr)
+                        set_lr(optimizer, mixup_lr, mixup_decay)
 
                 for i, (batch_x, batch_y) in enumerate(train_dataloader, 1):
                     if epoch >= mixup_warmup and mixup_enabled:
@@ -1388,6 +1517,20 @@ def main(
                             )
                             step_end = time.time()
                             # print(f"step: {(step_end - step_start) * 1000:.2f} ms")
+                        elif mixup_type == "ssmix":
+                            train_loss = train_ssmix_step(
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                ss_winsize,
+                                naive_augment,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
                         else:
                             train_loss = train_mixup_step(
                                 global_step,

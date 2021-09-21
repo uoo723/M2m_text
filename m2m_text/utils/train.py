@@ -19,6 +19,10 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 
+TInput = Union[torch.Tensor, Dict[str, torch.Tensor]]
+TModel = Union[nn.Module, nn.DataParallel]
+
+
 def make_step(grad, attack, step_size, shape=torch.Size([-1, 1, 1, 1])):
     """
     Reference: https://github.com/alinlab/M2m/blob/master/utils.py
@@ -52,7 +56,7 @@ def sum_t(tensor):
 
 
 def clip_gradient(
-    model: Union[nn.Module, nn.DataParallel],
+    model: TModel,
     gradient_norm_queue: deque,
     gradient_clip_value: Optional[float] = None,
     verbose: bool = False,
@@ -172,13 +176,21 @@ def get_embeddings(
 
 
 def to_device(
-    inputs: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    inputs: TInput,
     device: torch.device = torch.device("cpu"),
-) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+) -> TInput:
     return (
-        {k: v.to(device) for k, v in inputs.items()}
+        {k: v.to(device) if v is not None else None for k, v in inputs.items()}
         if type(inputs) == dict
         else inputs.to(device)
+    )
+
+
+def clone_tensor(inputs: TInput) -> TInput:
+    return (
+        {k: v.clone() if v is not None else None for k, v in inputs.items()}
+        if type(inputs) == dict
+        else inputs.clone()
     )
 
 

@@ -43,6 +43,7 @@ from .modules import (
     Readout,
     Residual,
 )
+from .roberta import RobertaModel4Mix
 from .utils.graph import MultiLayerNeighborSampler, get_ease_weight, stack_embed
 
 
@@ -639,6 +640,110 @@ class LaRoberta(RobertaPreTrainedModel):
             output = (logits,)
             if return_attention_score and type(attn_out) == tuple:
                 output += (attn_out[1],)
+
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+class LaRoberta4Mix(RobertaPreTrainedModel):
+    authorized_missing_keys = [r"position_ids"]
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        linear_size: List[int],
+        freeze_encoder: bool = False,
+        mp_enabled: bool = False,
+    ):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        self.roberta = RobertaModel4Mix(config, add_pooling_layer=False)
+        self.attention = MLAttention(self.num_labels, config.hidden_size)
+        self.linear = MLLinear([config.hidden_size] + linear_size, 1)
+
+        self.mp_enabled = mp_enabled
+
+        if freeze_encoder:
+            for param in self.base_model.parameters():
+                param.requires_grad = False
+
+        self.init_weights()
+
+    def forward(
+        self,
+        inputs=None,
+        inputs2=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=False,
+        trace_grad=False,
+        mix_lambda=None,
+        mix_layer=None,
+        mix_embedding=False,
+        return_attention_score=False,
+        mp_enabled: Optional[bool] = None,
+    ):
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        if inputs is not None and type(inputs) == dict:
+            attention_mask = inputs["attention_mask"]
+
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            outputs = self.roberta(
+                inputs=inputs,
+                inputs2=inputs2,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                trace_grad=trace_grad,
+                mix_lambda=mix_lambda,
+                mix_layer=mix_layer,
+                mix_embedding=mix_embedding,
+            )
+            sequence_output = outputs[0]
+            attn_out = self.attention(
+                sequence_output, attention_mask.bool(), return_attention_score
+            )
+            logits = (
+                self.linear(attn_out[0])
+                if type(attn_out) == tuple
+                else self.linear(attn_out)
+            )
+
+            loss = None
+            if labels is not None:
+                if self.num_labels == 1:
+                    #  We are doing regression
+                    loss_fct = nn.MSELoss()
+                    loss = loss_fct(logits.view(-1), labels.view(-1))
+                else:
+                    loss_fct = nn.CrossEntropyLoss()
+                    loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if not return_dict:
+            output = (logits,)
+            if return_attention_score and type(attn_out) == tuple:
+                output += (attn_out[1],)
+            output += outputs[1:]
 
             return ((loss,) + output) if loss is not None else output
 
