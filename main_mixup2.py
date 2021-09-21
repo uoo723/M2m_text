@@ -5,8 +5,8 @@ Created on 2021/07/06
 Instace Anchor new version, no cluster
 """
 import copy
-from m2m_text.utils.ssmix import get_loss, split_batch, ssmix_augment
 import os
+import random
 import re
 import shutil
 import time
@@ -19,6 +19,7 @@ import click
 import numpy as np
 import torch
 import torch.nn as nn
+from click_option_group import optgroup
 from logzero import logger
 from ruamel.yaml import YAML
 from scipy.sparse import csr_matrix, lil_matrix
@@ -29,7 +30,6 @@ from torch.optim import Optimizer
 from torch.utils.data import Subset
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
-from click_option_group import optgroup
 
 from m2m_text.datasets import (
     AmazonCat,
@@ -55,6 +55,7 @@ from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
 from m2m_text.utils.mixup import mixup
 from m2m_text.utils.model import load_checkpoint2, save_checkpoint2
+from m2m_text.utils.ssmix import get_loss, split_batch, ssmix_augment
 from m2m_text.utils.train import (
     clip_gradient,
     log_elapsed_time,
@@ -812,6 +813,94 @@ def train_ssmix_step(
     return loss.item()
 
 
+# Reference: https://github.com/clovaai/ssmix
+def train_embed_or_tmix_step(
+    global_step: int,
+    accumulation_step: int,
+    model: nn.Module,
+    criterion: nn.Module,
+    batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
+    batch_y: torch.Tensor,
+    scaler: GradScaler,
+    optim: Optimizer,
+    mixup_type: str,
+    mixup_alpha: float,
+    naive_augment: bool = False,
+    gradient_clip_value: Optional[float] = None,
+    gradient_norm_queue: Optional[deque] = None,
+    device: torch.device = torch.device("cpu"),
+) -> Optional[float]:
+    model.train()
+
+    batch_x = to_device(batch_x, device)
+    batch_y = to_device(batch_y, device)
+
+    if mixup_type == "tmix":
+        mix_layer = random.choice([7, 9, 12]) - 1
+        mix_embedding = False
+    elif mixup_type == "embedmix":
+        mix_embedding = True
+        mix_layer = None
+    else:
+        raise ValueError(f"Invalid mixup type: {mixup_type}")
+
+    l = np.random.beta(mixup_alpha, mixup_alpha)
+    l = max(l, 1 - l)
+
+    inputs1, targets1, inputs2, targets2 = split_batch(batch_x, batch_y)
+
+    if inputs1 is None:
+        return 0
+
+    losses = []
+    with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+        if not naive_augment:
+            losses.append(get_loss(model, criterion, inputs1, targets1))
+            losses.append(get_loss(model, criterion, inputs2, targets2))
+
+        losses.append(
+            get_loss(
+                model,
+                criterion,
+                inputs1,
+                targets1,
+                targets2,
+                l,
+                inputs2=inputs2,
+                mix_lambda=l,
+                mix_layer=mix_layer,
+                mix_embedding=mix_embedding,
+            )
+        )
+        losses.append(
+            get_loss(
+                model,
+                criterion,
+                inputs2,
+                targets2,
+                targets1,
+                l,
+                inputs2=inputs1,
+                mix_lambda=l,
+                mix_layer=mix_layer,
+                mix_embedding=mix_embedding,
+            )
+        )
+
+    loss = scaler.scale(torch.stack(losses).mean())
+    loss.backward()
+
+    if (global_step + 1) % accumulation_step == 0:
+        scaler.unscale_(optim)
+        clip_gradient(model, gradient_norm_queue, gradient_clip_value)
+
+        scaler.step(optim)
+        scaler.update()
+        optim.zero_grad()
+
+    return loss.item()
+
+
 def predict_step(
     model: nn.Module,
     batch_x: Union[torch.Tensor, Dict[str, torch.Tensor]],
@@ -1121,7 +1210,9 @@ def get_optimizer(
 )
 @optgroup.option(
     "--mixup-type",
-    type=click.Choice(["word", "inplace", "inplace2", "ssmix"]),
+    type=click.Choice(
+        ["word", "inplace", "inplace2", "ssmix", "embedmix", "tmix"]
+    ),  # word == embedmix
     default="inplace2",
     help="Type of Mixup",
 )
@@ -1213,7 +1304,7 @@ def main(
     mixup_enabled: bool,
     mixup_lr: float,
     mixup_decay: float,
-    mixup_type: str,
+    mixup_type: str,  # word == embedmix
     mixup_alpha: float,
     mixup_warmup: int,
     no_label_smoothing: bool,
@@ -1238,10 +1329,12 @@ def main(
     dataset_name = data_cnf["name"]
 
     ################################ Assert options ##################################
+    if mixup_type in ["ssmix", "embedmix", "tmix"]:
+        assert model_name in MIX_MODELS
+
     if mixup_type == "ssmix":
         assert accumulation_step == 1, "ssmix does not support gradient accumulation"
         assert not mp_enabled, "ssmix does not support mixed precision"
-        assert model_name in MIX_MODELS
     ##################################################################################
 
     ################################ Initialize Config ###############################
@@ -1526,6 +1619,23 @@ def main(
                                 scaler,
                                 optimizer,
                                 ss_winsize,
+                                naive_augment,
+                                gradient_max_norm,
+                                gradient_norm_queue,
+                                device,
+                            )
+                        elif mixup_type in ["embedmix", "tmix"]:
+                            train_loss = train_embed_or_tmix_step(
+                                global_step,
+                                accumulation_step,
+                                model,
+                                criterion,
+                                batch_x,
+                                batch_y,
+                                scaler,
+                                optimizer,
+                                mixup_type,
+                                mixup_alpha,
                                 naive_augment,
                                 gradient_max_norm,
                                 gradient_norm_queue,
