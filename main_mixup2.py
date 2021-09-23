@@ -50,7 +50,13 @@ from m2m_text.metrics import (
     get_psp_5,
     get_r_10,
 )
-from m2m_text.networks import AttentionRNN, LaCNN, LaRoberta, LaRoberta4Mix
+from m2m_text.networks import (
+    AttentionRNN,
+    AttentionRNN4Mix,
+    LaCNN,
+    LaRoberta,
+    LaRoberta4Mix,
+)
 from m2m_text.optimizers import DenseSparseAdamW
 from m2m_text.utils.data import copy_file, get_mlb
 from m2m_text.utils.mixup import mixup
@@ -78,13 +84,14 @@ DATASET_CLS = {
 
 MODEL_CLS = {
     "AttentionRNN": AttentionRNN,
+    "AttentionRNN4Mix": AttentionRNN4Mix,
     "LaRoberta": LaRoberta,
     "LaRoberta4Mix": LaRoberta4Mix,
     "LaCNN": LaCNN,
 }
 
 TRANSFORMER_MODELS = ["LaRoberta", "LaRoberta4Mix"]
-MIX_MODELS = ["LaRoberta4Mix"]
+MIX_MODELS = ["AttentionRNN4Mix", "LaRoberta4Mix"]
 
 
 def get_model(
@@ -398,7 +405,7 @@ def train_mixup_step(
     return loss.item()
 
 
-def train_word_mixup_step(
+def train_word_or_hidden_mixup_step(
     global_step: int,
     accumulation_step: int,
     model: nn.Module,
@@ -407,6 +414,7 @@ def train_word_mixup_step(
     batch_y: torch.Tensor,
     scaler: GradScaler,
     optim: Optimizer,
+    mixup_type: str,
     mixup_alpha: float,
     flow_mixup_enabled: bool,
     flow_alpha: float,
@@ -421,28 +429,36 @@ def train_word_mixup_step(
     batch_x = to_device(batch_x, device)
     batch_y = to_device(batch_y, device)
 
+    losses = []
+
+    if mixup_type == "word":
+        return_args = {"return_emb": True}
+        pass_args = {"pass_emb": True}
+    else:
+        return_args = {"return_hidden": True}
+        pass_args = {"pass_hidden": True}
+
     with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
-        outputs = model(batch_x, return_emb=True)
+        outputs = model(batch_x, **return_args)
         outputs, others = outputs[0], outputs[1:]
 
         mixed_outputs = outputs.clone()
         mixed_batch_y = batch_y.clone()
 
         ridx = torch.randperm(batch_size)
-        lamda = torch.distributions.Beta(mixup_alpha, mixup_alpha).sample()
+        lamda = np.random.beta(mixup_alpha, mixup_alpha)
+        lamda = max(lamda, 1 - lamda)
 
         mixed_outputs = mixup(mixed_outputs, mixed_outputs[ridx], lamda)
         mixed_batch_y = mixup(mixed_batch_y, mixed_batch_y[ridx], lamda)
 
         if flow_mixup_enabled:
-            outputs = model((outputs, *others), pass_emb=True)[0]
-            loss = criterion(outputs, batch_y)
-        else:
-            loss = 0
-            flow_alpha = 1.0
+            outputs = model((outputs, *others), **pass_args)[0]
+            losses.append(flow_alpha * criterion(outputs, batch_y))
 
-        mixed_outputs = model((mixed_outputs, *others), pass_emb=True)[0]
-        loss = loss + flow_alpha * criterion(mixed_outputs, mixed_batch_y)
+        mixed_outputs = model((mixed_outputs, *others), **pass_args)[0]
+        losses.append(criterion(mixed_outputs, mixed_batch_y))
+        loss = torch.stack(losses).mean()
         loss = loss / accumulation_step
 
     loss = scaler.scale(loss)
@@ -644,7 +660,7 @@ def train_in_place_mixup_step_v2(
                 lam = (
                     torch.distributions.Dirichlet(torch.tensor([mixup_alpha] * (n + 1)))
                     .sample()
-                    .sort()[0]
+                    .sort(descending=True)[0]
                 )
 
                 lamda[i, j, : n + 1] = lam
@@ -1211,8 +1227,8 @@ def get_optimizer(
 @optgroup.option(
     "--mixup-type",
     type=click.Choice(
-        ["word", "inplace", "inplace2", "ssmix", "embedmix", "tmix"]
-    ),  # word == embedmix
+        ["word", "hidden", "inplace", "inplace2", "ssmix", "embedmix", "tmix"]
+    ),  # word == embedmix, hidden == tmix
     default="inplace2",
     help="Type of Mixup",
 )
@@ -1331,10 +1347,16 @@ def main(
     ################################ Assert options ##################################
     if mixup_type in ["ssmix", "embedmix", "tmix"]:
         assert model_name in MIX_MODELS
+        if model_name == "AttentionRNN4Mix":
+            assert mixup_type == "ssmix", f"{model_name} does not support {mixup_type}"
 
     if mixup_type == "ssmix":
         assert accumulation_step == 1, "ssmix does not support gradient accumulation"
         assert not mp_enabled, "ssmix does not support mixed precision"
+
+    if mixup_type in ["word", "hidden"]:
+        if no_label_smoothing:
+            logger.warning(f"{mixup_type} is not support no_label_smoothing option.")
     ##################################################################################
 
     ################################ Initialize Config ###############################
@@ -1548,8 +1570,8 @@ def main(
 
                 for i, (batch_x, batch_y) in enumerate(train_dataloader, 1):
                     if epoch >= mixup_warmup and mixup_enabled:
-                        if mixup_type == "word":
-                            train_loss = train_word_mixup_step(
+                        if mixup_type in ["word", "hidden"]:
+                            train_loss = train_word_or_hidden_mixup_step(
                                 global_step,
                                 accumulation_step,
                                 model,
@@ -1558,6 +1580,7 @@ def main(
                                 batch_y,
                                 scaler,
                                 optimizer,
+                                mixup_type,
                                 mixup_alpha,
                                 flow_mixup_enabled,
                                 flow_alpha,

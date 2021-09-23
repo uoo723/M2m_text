@@ -119,6 +119,9 @@ def ssmix_augment(
             ratio[i] = 1.0
             continue
 
+        if l1 - ignore_num_toks == 0:
+            continue
+
         saliency1_nopad = saliency1[i, :l1].unsqueeze(0).unsqueeze(0)
         saliency2_nopad = saliency2[i, :l2].unsqueeze(0).unsqueeze(0)
 
@@ -138,7 +141,7 @@ def ssmix_augment(
                 "input_ids"
             ][i, input2_idx : input2_idx + mix_size]
 
-            ratio[i] = 1 - (mix_size / (l1 - 2))
+            ratio[i] = 1 - (mix_size / (l1 - ignore_num_toks))
         else:
             input1_idx = saliency1_pool.argmin()
             input2_idx = saliency2_pool.argmax()
@@ -146,6 +149,6 @@ def ssmix_augment(
                 i, input2_idx : input2_idx + mix_size
             ]
 
-            ratio[i] = 1 - (mix_size / (l1 - 2))
+            ratio[i] = 1 - (mix_size / (l1 - ignore_num_toks))
 
     return inputs_aug, ratio

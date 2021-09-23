@@ -181,6 +181,47 @@ class AttentionRNN(Network):
                 return (self.linear(attn_out),)
 
 
+class AttentionRNN4Mix(Network):
+    def __init__(
+        self,
+        num_labels: int,
+        emb_size: int,
+        hidden_size: int,
+        num_layers: int,
+        linear_size: List[int],
+        dropout: float,
+        mp_enabled: bool = False,
+        **kwargs,
+    ):
+        super().__init__(emb_size, **kwargs)
+        self.lstm = LSTMEncoder(emb_size, hidden_size, num_layers, dropout)
+        self.attention = MLAttention(num_labels, hidden_size * 2)
+        self.linear = MLLinear([hidden_size * 2] + linear_size, 1)
+        self.mp_enabled = mp_enabled
+
+    def forward(
+        self,
+        inputs: torch.Tensor,
+        trace_grad: bool = False,
+        mp_enabled: Optional[bool] = None,
+        **kwargs,
+    ):
+        if mp_enabled is None:
+            mp_enabled = self.mp_enabled
+
+        with torch.cuda.amp.autocast(enabled=mp_enabled):
+            emb_out, lengths, masks = self.emb(inputs, **kwargs)
+
+            if trace_grad:
+                emb_out = emb_out.detach().requires_grad_(True)
+
+            rnn_out = self.lstm(emb_out, lengths)
+            attn_out = self.attention(rnn_out, masks)
+            linear_out = self.linear(attn_out)
+
+            return (linear_out, emb_out)
+
+
 class AttentionRNNEncoder(Network):
     def __init__(
         self,
